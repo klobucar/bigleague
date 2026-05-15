@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from unittest.mock import patch
+
+import polars as pl
+import pytest
+from bigleague.cache import StatcastCache
+
+
+@pytest.fixture(autouse=True)
+def _enable_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per-test override of the global no-cache shield."""
+    monkeypatch.delenv("BIGLEAGUE_NO_CACHE", raising=False)
+
+
+def test_no_cache_env_bypasses_disk(tmp_path: Path) -> None:
+    os.environ["BIGLEAGUE_NO_CACHE"] = "1"
+    try:
+        c = StatcastCache(tmp_path)
+        c.set("k", pl.DataFrame({"a": [1]}))
+        assert c.get("k") is None
+        assert not list(tmp_path.glob("*.parquet"))
+    finally:
+        del os.environ["BIGLEAGUE_NO_CACHE"]
+
+
+def test_definite_miss_skips_disk_check(tmp_path: Path) -> None:
+    c = StatcastCache(tmp_path)
+    with patch.object(Path, "exists", autospec=True) as mock_exists:
+        result = c.get("never_seen_key")
+    assert result is None
+    mock_exists.assert_not_called()
+
+
+def test_set_then_get_round_trips(tmp_path: Path) -> None:
+    c = StatcastCache(tmp_path)
+    df = pl.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+    c.set("k", df)
+    got = c.get("k")
+    assert got is not None
+    assert got.equals(df)
+
+
+def test_seed_bloom_does_not_read_parquet(tmp_path: Path) -> None:
+    # Pre-populate the cache dir
+    c1 = StatcastCache(tmp_path)
+    c1.set("a", pl.DataFrame({"x": [1]}))
+    # New cache instance — should seed bloom from filenames only
+    with patch("bigleague.cache.pl.read_parquet") as mock_read:
+        c2 = StatcastCache(tmp_path)
+    mock_read.assert_not_called()
+    assert b"a" in c2.bloom
+
+
+def test_clear_removes_files_and_resets_bloom(tmp_path: Path) -> None:
+    c = StatcastCache(tmp_path)
+    c.set("a", pl.DataFrame({"x": [1]}))
+    c.set("b", pl.DataFrame({"x": [2]}))
+    c.clear()
+    assert not list(tmp_path.glob("*.parquet"))
+    assert b"a" not in c.bloom
+    assert b"b" not in c.bloom
+
+
+def test_size_returns_total_parquet_bytes(tmp_path: Path) -> None:
+    c = StatcastCache(tmp_path)
+    assert c.size() == 0
+    c.set("a", pl.DataFrame({"x": [1, 2, 3]}))
+    expected = sum(f.stat().st_size for f in tmp_path.glob("*.parquet"))
+    assert c.size() == expected
+    assert c.size() > 0
+
+
+def test_false_positive_falls_through_to_disk_miss(tmp_path: Path) -> None:
+    c = StatcastCache(tmp_path)
+    c.bloom.insert(b"ghost")  # bloom says yes but no file exists
+    assert c.get("ghost") is None

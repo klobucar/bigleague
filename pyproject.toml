@@ -1,0 +1,88 @@
+[project]
+name = "bigleague"
+version = "0.1.0"
+description = "Async polars-native baseball data and plotting library"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "polars>=0.20",
+    "httpx>=0.27",
+    "curl_cffi>=0.7",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+bloom = ["bouquet"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-recording>=0.13",
+    "respx>=0.21",
+    "vcrpy>=6",
+    "ruff>=0.7",
+    "ty>=0.0.1",
+    "bouquet",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:vcr",
+]
+
+[tool.uv]
+package = false
+# Supply-chain defense: only install package versions published at least
+# 1 week ago so freshly-uploaded malicious releases have time to be caught.
+exclude-newer = "1 week"
+
+[tool.uv.sources]
+bouquet = { path = "../bouquet/bouquet-py" }
+
+# ── ruff ───────────────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["bigleague", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "SIM",   # flake8-simplify
+    "PTH",   # flake8-use-pathlib
+    "RUF",   # ruff-specific
+    "ASYNC", # flake8-async
+    "PT",    # flake8-pytest-style
+    "RET",   # flake8-return
+    "PERF",  # perflint
+    "FA",    # flake8-future-annotations
+    "G",     # flake8-logging-format
+]
+ignore = [
+    "E501",    # line length — handled by formatter
+    "SIM108",  # ternary vs if/else — subjective
+    "PLC0415", # local imports — needed for lazy matplotlib import in plots
+    "PLW0603", # global statement — used by http.py client cache
+    "PT011",   # broad pytest.raises — fine for our error checks
+    "RET504",  # unnecessary assignment before return — readability
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]   # allow assert in tests
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ── ty ─────────────────────────────────────────────────────────────────────────
+[tool.ty.environment]
+python-version = "3.12"
