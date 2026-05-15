@@ -8,6 +8,7 @@ fields raise loudly at import time.
 
 from __future__ import annotations
 
+import types
 import typing
 from dataclasses import fields
 from datetime import date
@@ -27,7 +28,7 @@ PY_TO_POLARS: dict[type, pl.DataType] = {
 def _unwrap(hint: object) -> object:
     """Return the non-None type from `T | None`, or `hint` itself."""
     origin = typing.get_origin(hint)
-    if origin is typing.Union or str(origin) == "types.UnionType":
+    if origin is typing.Union or origin is types.UnionType:
         args = [a for a in typing.get_args(hint) if a is not type(None)]
         if len(args) == 1:
             return args[0]
