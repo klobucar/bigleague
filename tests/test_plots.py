@@ -89,8 +89,10 @@ def test_close_fig_called_in_finally() -> None:
 
     df = _zone_df()
     fake_fig, fake_ax = MagicMock(), MagicMock()
-    with patch("bigleague.plots.plt") as mock_plt, \
-         patch("bigleague.plots._save_png", side_effect=RuntimeError("boom")):
+    with (
+        patch("bigleague.plots.plt") as mock_plt,
+        patch("bigleague.plots._save_png", side_effect=RuntimeError("boom")),
+    ):
         mock_plt.subplots.return_value = (fake_fig, fake_ax)
         with pytest.raises(RuntimeError, match="boom"):
             plots.strike_zone(df, "Test")

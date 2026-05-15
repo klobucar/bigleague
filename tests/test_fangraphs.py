@@ -18,6 +18,7 @@ def _fake_resp(status: int = 200, payload: dict[str, Any] | None = None) -> Magi
 def _patch_cc(monkeypatch: pytest.MonkeyPatch, mock_get: Any) -> None:
     """Replace curl_cffi.requests.get with our mock."""
     import curl_cffi.requests as cc
+
     monkeypatch.setattr(cc, "get", mock_get)
 
 
@@ -44,9 +45,12 @@ async def test_5xx_retries_three_times(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_html_anchor_tags_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = {
         "data": [
-            {"Name": '<a href="/players/judge">Aaron Judge</a>',
-             "Team": '<a href="/teams/nyy">NYY</a>',
-             "WAR": 8.5, "PA": 700},
+            {
+                "Name": '<a href="/players/judge">Aaron Judge</a>',
+                "Team": '<a href="/teams/nyy">NYY</a>',
+                "WAR": 8.5,
+                "PA": 700,
+            },
         ]
     }
     _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(200, payload)))
@@ -61,11 +65,13 @@ async def test_player_stats_auto_detects_pitcher(monkeypatch: pytest.MonkeyPatch
     bat_payload = {"data": []}
 
     seen: list[dict[str, Any]] = []
+
     def _get(_url, params, **_kw):
         seen.append(params)
         if params["stats"] == "pit":
             return _fake_resp(200, pitch_payload)
         return _fake_resp(200, bat_payload)
+
     _patch_cc(monkeypatch, MagicMock(side_effect=_get))
 
     out = await fangraphs.player_stats("Gerrit", "Cole", 2024)
@@ -76,8 +82,10 @@ async def test_player_stats_auto_detects_pitcher(monkeypatch: pytest.MonkeyPatch
 async def test_player_stats_falls_back_to_batter(monkeypatch: pytest.MonkeyPatch) -> None:
     pitch_payload: dict[str, Any] = {"data": []}
     bat_payload = {"data": [{"Name": "Aaron Judge", "Team": "NYY", "AVG": 0.310, "WAR": 8.0}]}
+
     def _get(_url, params, **_kw):
         return _fake_resp(200, pitch_payload if params["stats"] == "pit" else bat_payload)
+
     _patch_cc(monkeypatch, MagicMock(side_effect=_get))
 
     out = await fangraphs.player_stats("Aaron", "Judge", 2024)
@@ -101,8 +109,10 @@ async def test_top_leaderboard_sorts_descending(monkeypatch: pytest.MonkeyPatch)
         ]
     }
     pitch_payload: dict[str, Any] = {"data": []}
+
     def _get(_url, params, **_kw):
         return _fake_resp(200, pitch_payload if params["stats"] == "pit" else bat_payload)
+
     _patch_cc(monkeypatch, MagicMock(side_effect=_get))
 
     out = await fangraphs.top_leaderboard("HR", 2024, n=3, player_type="batter")

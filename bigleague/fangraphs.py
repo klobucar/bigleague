@@ -42,8 +42,7 @@ _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY = 0.75
 
 _CF_BLOCKED_MSG = (
-    "FanGraphs is blocking the request right now (probably Cloudflare). "
-    "Try again in a few minutes."
+    "FanGraphs is blocking the request right now (probably Cloudflare). Try again in a few minutes."
 )
 
 
@@ -87,9 +86,7 @@ def _fg_get(params: dict[str, Any]) -> dict[str, Any]:
     resp = None
     for attempt in range(_RETRY_ATTEMPTS):
         try:
-            resp = cc_requests.get(
-                _FG_API_URL, params=params, impersonate="chrome", timeout=20
-            )
+            resp = cc_requests.get(_FG_API_URL, params=params, impersonate="chrome", timeout=20)
         except Exception as exc:
             if attempt < _RETRY_ATTEMPTS - 1:
                 log.warning(
@@ -240,18 +237,14 @@ async def leaderboard(
     return await asyncio.to_thread(_fetch_leaderboard_sync, year, kind, qual)
 
 
-async def batting_stats(
-    start_season: int, end_season: int, qual: int | str = 1
-) -> pl.DataFrame:
+async def batting_stats(start_season: int, end_season: int, qual: int | str = 1) -> pl.DataFrame:
     return await asyncio.to_thread(_fetch_leaderboard_sync, start_season, "bat", qual)
     # NOTE: harry-bot's pybaseball variant aggregated multi-season; the JSON
     # endpoint with season=A&season1=B returns the multi-year leaderboard.
     # If we need true multi-season aggregation we revisit here.
 
 
-async def pitching_stats(
-    start_season: int, end_season: int, qual: int | str = 1
-) -> pl.DataFrame:
+async def pitching_stats(start_season: int, end_season: int, qual: int | str = 1) -> pl.DataFrame:
     return await asyncio.to_thread(_fetch_leaderboard_sync, start_season, "pit", qual)
 
 

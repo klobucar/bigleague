@@ -22,7 +22,8 @@ from pathlib import Path
 import polars as pl
 
 try:
-    from bouquet import ClassicalFilter
+    # bouquet is a Rust extension with no type stubs; ty can't see its exports.
+    from bouquet import ClassicalFilter  # ty: ignore[unresolved-import]
 except ImportError:
     ClassicalFilter = None  # type: ignore[assignment,misc]
 
@@ -33,9 +34,7 @@ class StatcastCache:
     def __init__(self, cache_dir: Path | None = None) -> None:
         env_dir = os.environ.get("BIGLEAGUE_CACHE_DIR")
         self.cache_dir = (
-            cache_dir
-            or (Path(env_dir).expanduser() if env_dir else None)
-            or _DEFAULT_CACHE_DIR
+            cache_dir or (Path(env_dir).expanduser() if env_dir else None) or _DEFAULT_CACHE_DIR
         )
         self.bloom: ClassicalFilter | None = (
             ClassicalFilter.from_false_pos(0.01, 10_000) if ClassicalFilter else None
@@ -75,7 +74,7 @@ class StatcastCache:
     def clear(self) -> None:
         for f in self.cache_dir.glob("*.parquet"):
             f.unlink()
-        if self.bloom is not None:
+        if self.bloom is not None and ClassicalFilter is not None:
             self.bloom = ClassicalFilter.from_false_pos(0.01, 10_000)
 
     def size(self) -> int:

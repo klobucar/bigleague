@@ -81,8 +81,15 @@ async def test_recent_results_keeps_postponed_and_sorts_oldest_first() -> None:
                             {
                                 "status": {"abstractGameState": "Final", "detailedState": "Final"},
                                 "teams": {
-                                    "home": {"team": {"id": 147, "abbreviation": "NYY"}, "score": 5, "isWinner": True},
-                                    "away": {"team": {"id": 111, "abbreviation": "BOS"}, "score": 3},
+                                    "home": {
+                                        "team": {"id": 147, "abbreviation": "NYY"},
+                                        "score": 5,
+                                        "isWinner": True,
+                                    },
+                                    "away": {
+                                        "team": {"id": 111, "abbreviation": "BOS"},
+                                        "score": 3,
+                                    },
                                 },
                             }
                         ],
@@ -91,7 +98,10 @@ async def test_recent_results_keeps_postponed_and_sorts_oldest_first() -> None:
                         "date": "2024-04-01",
                         "games": [
                             {
-                                "status": {"abstractGameState": "Preview", "detailedState": "Postponed"},
+                                "status": {
+                                    "abstractGameState": "Preview",
+                                    "detailedState": "Postponed",
+                                },
                                 "teams": {
                                     "home": {"team": {"id": 147, "abbreviation": "NYY"}},
                                     "away": {"team": {"id": 110, "abbreviation": "BAL"}},
@@ -103,7 +113,10 @@ async def test_recent_results_keeps_postponed_and_sorts_oldest_first() -> None:
                         "date": "2024-04-03",
                         "games": [
                             {
-                                "status": {"abstractGameState": "Live", "detailedState": "In Progress"},
+                                "status": {
+                                    "abstractGameState": "Live",
+                                    "detailedState": "In Progress",
+                                },
                                 "teams": {
                                     "home": {"team": {"id": 147, "abbreviation": "NYY"}},
                                     "away": {"team": {"id": 111, "abbreviation": "BOS"}},
@@ -131,8 +144,13 @@ async def test_standings_returns_six_divisions() -> None:
                     {
                         "division": {"nameShort": f"Div {i}"},
                         "teamRecords": [
-                            {"team": {"name": f"Team {i}"}, "wins": 50, "losses": 40,
-                             "gamesBack": "-", "winningPercentage": ".556"}
+                            {
+                                "team": {"name": f"Team {i}"},
+                                "wins": 50,
+                                "losses": 40,
+                                "gamesBack": "-",
+                                "winningPercentage": ".556",
+                            }
                         ],
                     }
                     for i in range(1, 7)
@@ -149,9 +167,18 @@ async def test_mlb_get_retries_5xx() -> None:
     route = respx.get(f"{_BASE}/teams/147/roster").mock(
         side_effect=[
             httpx.Response(503),
-            httpx.Response(200, json={"roster": [
-                {"person": {"fullName": "X"}, "position": {"abbreviation": "P"}, "status": {"description": "Active"}}
-            ]}),
+            httpx.Response(
+                200,
+                json={
+                    "roster": [
+                        {
+                            "person": {"fullName": "X"},
+                            "position": {"abbreviation": "P"},
+                            "status": {"description": "Active"},
+                        }
+                    ]
+                },
+            ),
         ]
     )
     out = await mlb.roster("NYY")

@@ -32,6 +32,7 @@ LIBS = ["bigleague", "pybaseball", "pandas_pyarrow"]
 
 # ── workers ────────────────────────────────────────────────────────────────
 
+
 def _bigleague_fetch(player: int, start: str, end: str):
     import asyncio
     from datetime import date as _d
@@ -57,7 +58,7 @@ def worker_bigleague(scenario: str, player: int, year: int) -> dict:
 
 
 def worker_pybaseball(scenario: str, player: int, year: int) -> dict:
-    from pybaseball import statcast_batter
+    from pybaseball import statcast_batter  # ty: ignore[unresolved-import]
 
     if scenario in ("month_cold", "month_warm"):
         df = statcast_batter(f"{year}-04-01", f"{year}-04-30", player)
@@ -73,7 +74,7 @@ def worker_pandas_pyarrow(scenario: str, player: int, year: int) -> dict:
     import io
 
     import httpx
-    import pandas as pd
+    import pandas as pd  # ty: ignore[unresolved-import]
 
     def fetch(start: str, end: str):
         # Same endpoint as bigleague (savant.py:25-26) but un-chunked like
@@ -142,11 +143,16 @@ def _spawn(lib: str, scenario: str, player: int, year: int, no_cache: bool) -> d
         env.pop("BIGLEAGUE_NO_CACHE", None)
     proc = subprocess.run(
         [
-            sys.executable, __file__,
-            "--worker", lib,
-            "--scenario", scenario,
-            "--player", str(player),
-            "--year", str(year),
+            sys.executable,
+            __file__,
+            "--worker",
+            lib,
+            "--scenario",
+            scenario,
+            "--player",
+            str(player),
+            "--year",
+            str(year),
         ],
         env=env,
         capture_output=True,
@@ -156,7 +162,8 @@ def _spawn(lib: str, scenario: str, player: int, year: int, no_cache: bool) -> d
     )
     if proc.returncode != 0:
         return {
-            "lib": lib, "scenario": scenario,
+            "lib": lib,
+            "scenario": scenario,
             "error": (proc.stderr or proc.stdout)[-400:].strip(),
         }
     for line in reversed(proc.stdout.splitlines()):
@@ -191,15 +198,19 @@ def run_one_worker(args: argparse.Namespace) -> None:
     wall = time.monotonic() - t0
     _, peak_heap = tracemalloc.get_traced_memory()
     tracemalloc.stop()
-    print(json.dumps({
-        "lib": args.worker,
-        "scenario": args.scenario,
-        "rows": result["rows"],
-        "frame_bytes": result["frame_bytes"],
-        "peak_heap_bytes": peak_heap,
-        "rss_bytes": _rss_bytes(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss),
-        "wall_s": round(wall, 3),
-    }))
+    print(
+        json.dumps(
+            {
+                "lib": args.worker,
+                "scenario": args.scenario,
+                "rows": result["rows"],
+                "frame_bytes": result["frame_bytes"],
+                "peak_heap_bytes": peak_heap,
+                "rss_bytes": _rss_bytes(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss),
+                "wall_s": round(wall, 3),
+            }
+        )
+    )
 
 
 def run_driver(args: argparse.Namespace) -> None:
@@ -218,7 +229,12 @@ def run_driver(args: argparse.Namespace) -> None:
     cols = ("lib", "scenario", "rows", "frame", "heap", "rss", "wall")
     widths = (16, 14, 8, 10, 10, 10, 9)
     print()
-    print("".join(c.rjust(w) if i else c.ljust(w) for i, (c, w) in enumerate(zip(cols, widths, strict=True))))
+    print(
+        "".join(
+            c.rjust(w) if i else c.ljust(w)
+            for i, (c, w) in enumerate(zip(cols, widths, strict=True))
+        )
+    )
     print("-" * sum(widths))
     for r in rows:
         if "error" in r:

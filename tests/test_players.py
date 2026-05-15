@@ -21,8 +21,12 @@ def stub_register(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> pl.DataFra
             "mlb_played_first": [2016, 2011, 2011, None],
             "mlb_played_last": [2024, 2024, 2024, None],
         },
-        schema_overrides={"key_mlbam": pl.Int64, "key_fangraphs": pl.Int64,
-                          "mlb_played_first": pl.Int64, "mlb_played_last": pl.Int64},
+        schema_overrides={
+            "key_mlbam": pl.Int64,
+            "key_fangraphs": pl.Int64,
+            "mlb_played_first": pl.Int64,
+            "mlb_played_last": pl.Int64,
+        },
     )
     cache_path = tmp_path / "chadwick_people.parquet"
     df.write_parquet(cache_path)
@@ -64,7 +68,9 @@ async def test_reverse_lookup_filters_by_id(stub_register) -> None:
     assert res["name_last"][0] == "Judge"
 
 
-async def test_mlb_years_extends_for_active_players(stub_register, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_mlb_years_extends_for_active_players(
+    stub_register, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Pretend "today" is 2026 — Trout's last_active should jump from 2024 to 2026
     class _FakeDate:
         @staticmethod
@@ -78,7 +84,9 @@ async def test_mlb_years_extends_for_active_players(stub_register, monkeypatch: 
     assert last == 2026
 
 
-async def test_mlb_years_falls_back_when_register_missing(stub_register, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_mlb_years_falls_back_when_register_missing(
+    stub_register, monkeypatch: pytest.MonkeyPatch
+) -> None:
     class _FakeDate:
         @staticmethod
         def today() -> _date:
@@ -91,7 +99,9 @@ async def test_mlb_years_falls_back_when_register_missing(stub_register, monkeyp
     assert last == 2026
 
 
-async def test_register_downloads_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_register_downloads_when_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """First call should hit HTTP, write parquet, and not re-download next time."""
     monkeypatch.setattr(players, "_REGISTER_PATH", tmp_path / "register.parquet")
 
@@ -100,6 +110,7 @@ async def test_register_downloads_when_missing(monkeypatch: pytest.MonkeyPatch, 
 
     class _FakeResp:
         content = csv
+
         def raise_for_status(self) -> None:
             return
 

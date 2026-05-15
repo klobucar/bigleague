@@ -35,9 +35,7 @@ def test_unknown_field_type_raises_on_schema_build(monkeypatch: pytest.MonkeyPat
         def __init__(self, name: str) -> None:
             self.name = name
 
-    monkeypatch.setattr(
-        schema_mod, "fields", lambda *_a, **_k: (*fake_fields, _Field("fake_col"))
-    )
+    monkeypatch.setattr(schema_mod, "fields", lambda *_a, **_k: (*fake_fields, _Field("fake_col")))
     with pytest.raises(TypeError, match="unsupported type"):
         schema_mod._build_schema()
 

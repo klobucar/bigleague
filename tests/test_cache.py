@@ -51,6 +51,7 @@ def test_seed_bloom_does_not_read_parquet(tmp_path: Path) -> None:
     with patch("bigleague.cache.pl.read_parquet") as mock_read:
         c2 = StatcastCache(tmp_path)
     mock_read.assert_not_called()
+    assert c2.bloom is not None
     assert b"a" in c2.bloom
 
 
@@ -60,6 +61,7 @@ def test_clear_removes_files_and_resets_bloom(tmp_path: Path) -> None:
     c.set("b", pl.DataFrame({"x": [2]}))
     c.clear()
     assert not list(tmp_path.glob("*.parquet"))
+    assert c.bloom is not None
     assert b"a" not in c.bloom
     assert b"b" not in c.bloom
 
@@ -75,5 +77,6 @@ def test_size_returns_total_parquet_bytes(tmp_path: Path) -> None:
 
 def test_false_positive_falls_through_to_disk_miss(tmp_path: Path) -> None:
     c = StatcastCache(tmp_path)
+    assert c.bloom is not None
     c.bloom.insert(b"ghost")  # bloom says yes but no file exists
     assert c.get("ghost") is None

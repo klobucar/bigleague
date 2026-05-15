@@ -15,9 +15,7 @@ import polars as pl
 
 from bigleague.http import get_client
 
-_REGISTER_URL = (
-    "https://github.com/chadwickbureau/register/raw/master/data/people.csv"
-)
+_REGISTER_URL = "https://github.com/chadwickbureau/register/raw/master/data/people.csv"
 _REGISTER_PATH = Path("~/.bigleague/cache/chadwick_people.parquet").expanduser()
 
 _REGISTER_COLS = (

@@ -114,8 +114,15 @@ def _zone_scatter(df: pl.DataFrame, title: str, colorby: str) -> bytes:
             label = key if key not in seen else None
             seen.add(key)
             ax.scatter(
-                row["plate_x"], row["plate_z"], c=color, label=label, alpha=0.6, s=40,
-                edgecolors="black", linewidths=0.3, zorder=2,
+                row["plate_x"],
+                row["plate_z"],
+                c=color,
+                label=label,
+                alpha=0.6,
+                s=40,
+                edgecolors="black",
+                linewidths=0.3,
+                zorder=2,
             )
         _draw_strike_zone(ax)
 
@@ -282,24 +289,33 @@ def _draw_field(
 
     # Infield diamond (90 ft bases) — square rotated 45°
     base = 90.0
-    diamond = np.array([
-        [0.0, 0.0],
-        [-base * np.sin(np.pi / 4), base * np.cos(np.pi / 4)],
-        [0.0, base * np.sqrt(2)],
-        [base * np.sin(np.pi / 4), base * np.cos(np.pi / 4)],
-    ])
+    diamond = np.array(
+        [
+            [0.0, 0.0],
+            [-base * np.sin(np.pi / 4), base * np.cos(np.pi / 4)],
+            [0.0, base * np.sqrt(2)],
+            [base * np.sin(np.pi / 4), base * np.cos(np.pi / 4)],
+        ]
+    )
     ax.add_patch(
         mpatches.Polygon(
-            diamond, closed=True, facecolor="tan", edgecolor="white", linewidth=1.0, zorder=3,
+            diamond,
+            closed=True,
+            facecolor="tan",
+            edgecolor="white",
+            linewidth=1.0,
+            zorder=3,
         )
     )
 
     if label:
-        ax.text(arc[0, 0] - 5, arc[0, 1] + 8, f"LF {int(lf)}'",
-                color="white", fontsize=9, ha="right")
+        ax.text(
+            arc[0, 0] - 5, arc[0, 1] + 8, f"LF {int(lf)}'", color="white", fontsize=9, ha="right"
+        )
         ax.text(0, cf + 8, f"CF {int(cf)}'", color="white", fontsize=9, ha="center")
-        ax.text(arc[-1, 0] + 5, arc[-1, 1] + 8, f"RF {int(rf)}'",
-                color="white", fontsize=9, ha="left")
+        ax.text(
+            arc[-1, 0] + 5, arc[-1, 1] + 8, f"RF {int(rf)}'", color="white", fontsize=9, ha="left"
+        )
 
     ax.set_xlim(-400, 400)
     ax.set_ylim(0, 450)
@@ -338,9 +354,7 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
     if team_code and "home_team" in data.columns:
         filtered = data.filter(pl.col("home_team") == team_code)
         if filtered.is_empty():
-            raise ValueError(
-                f"No batted-ball data at {stadium_key} park (team_code={team_code})."
-            )
+            raise ValueError(f"No batted-ball data at {stadium_key} park (team_code={team_code}).")
         data = filtered
 
     meta = STADIUM_DATA.get(stadium_key, STADIUM_DATA["generic"])
@@ -354,8 +368,16 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
             field_x = float(row["hc_x"]) - 125.42
             field_y = 198.27 - float(row["hc_y"])
             color = _hit_color(row.get("events"))
-            ax.scatter(field_x, field_y, c=color, s=30, alpha=0.7,
-                       edgecolors="black", linewidths=0.3, zorder=4)
+            ax.scatter(
+                field_x,
+                field_y,
+                c=color,
+                s=30,
+                alpha=0.7,
+                edgecolors="black",
+                linewidths=0.3,
+                zorder=4,
+            )
 
         legend_elements = [
             mpatches.Patch(color="gold", label="HR"),
@@ -389,9 +411,7 @@ def stadium_outline(stadium_key: str, title: str = "") -> bytes:
         if title:
             ax.set_title(title, fontsize=12, fontweight="bold")
         else:
-            ax.set_title(
-                f"{meta['name']} — {meta['location']}", fontsize=12, fontweight="bold"
-            )
+            ax.set_title(f"{meta['name']} — {meta['location']}", fontsize=12, fontweight="bold")
         return _save_png(fig)
     finally:
         plt.close(fig)

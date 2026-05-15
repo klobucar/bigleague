@@ -47,9 +47,7 @@ def test_matchup_stats_raises_for_missing_pitcher() -> None:
 
 
 def test_hot_cold_batter_basic() -> None:
-    df = _make_batter_df(
-        ["single", "double", "home_run", "field_out", "strikeout", "walk", "walk"]
-    )
+    df = _make_batter_df(["single", "double", "home_run", "field_out", "strikeout", "walk", "walk"])
     out = stats.hot_cold_batter(df)
     # 5 ABs (single, double, hr, out, k), 3 H, 2 BB, PA=7
     assert out["ab"] == 5
@@ -62,9 +60,7 @@ def test_hot_cold_batter_basic() -> None:
 
 
 def test_hot_cold_pitcher_counts_events() -> None:
-    df = _make_batter_df(
-        ["strikeout", "strikeout_double_play", "walk", "home_run", "single", None]
-    )
+    df = _make_batter_df(["strikeout", "strikeout_double_play", "walk", "home_run", "single", None])
     out = stats.hot_cold_pitcher(df)
     assert out["pitches"] == 6
     assert out["k"] == 2
@@ -78,9 +74,14 @@ def test_hot_zones_grid_returns_keys_1_through_9() -> None:
         {
             "zone": [1, 1, 5, 5, 5, 9, None, 12],
             "events": [
-                "single", "field_out",
-                "home_run", "double", "field_out",
-                "strikeout", "single", "single",
+                "single",
+                "field_out",
+                "home_run",
+                "double",
+                "field_out",
+                "strikeout",
+                "single",
+                "single",
             ],
         }
     )
@@ -145,14 +146,24 @@ def test_parse_percentile_ranks_pitcher() -> None:
 
 
 def test_aggregate_career_pitcher_ip_weights_rate_stats() -> None:
-    f1 = pl.DataFrame({
-        "Name": ["Test Player"], "_year": [2020],
-        "IP": [200.0], "ERA": [3.00], "W": [15],
-    })
-    f2 = pl.DataFrame({
-        "Name": ["Test Player"], "_year": [2021],
-        "IP": [100.0], "ERA": [6.00], "W": [5],
-    })
+    f1 = pl.DataFrame(
+        {
+            "Name": ["Test Player"],
+            "_year": [2020],
+            "IP": [200.0],
+            "ERA": [3.00],
+            "W": [15],
+        }
+    )
+    f2 = pl.DataFrame(
+        {
+            "Name": ["Test Player"],
+            "_year": [2021],
+            "IP": [100.0],
+            "ERA": [6.00],
+            "W": [5],
+        }
+    )
     out = stats.aggregate_career([f1, f2], "Test", "Player", [2020, 2021], "pitcher")
     assert out["type"] == "pitcher"
     stats_block = out["stats"]

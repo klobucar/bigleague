@@ -186,9 +186,7 @@ def parse_pitch_arsenal(df: pl.DataFrame) -> list[dict[str, str | float]]:
     has_spin = "avg_spin" in df.columns
     has_usage = "pitch_usage" in df.columns
 
-    total_pitches = (
-        df["pitches"].cast(pl.Float64).sum() if has_pitches else 0.0
-    )
+    total_pitches = df["pitches"].cast(pl.Float64).sum() if has_pitches else 0.0
 
     out: list[dict[str, str | float]] = []
     for row in df.iter_rows(named=True):

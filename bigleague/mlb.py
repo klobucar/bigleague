@@ -256,9 +256,7 @@ async def next_game(team: str) -> dict[str, str]:
     raise ValueError(f"No upcoming games found for {team} in the next 14 days.")
 
 
-async def recent_results(
-    team: str, n: int = 10, lookback_days: int = 30
-) -> list[dict[str, Any]]:
+async def recent_results(team: str, n: int = 10, lookback_days: int = 30) -> list[dict[str, Any]]:
     """Last N completed regular-season games, oldest -> newest.
 
     `result` is "W"/"L"/"P" — P covers postponed/suspended (kept so the

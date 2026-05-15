@@ -14,6 +14,7 @@ from dataclasses import fields
 from datetime import date
 
 import polars as pl
+
 from bigleague.models import StatcastPitch
 
 PY_TO_POLARS: dict[type, pl.DataType] = {
