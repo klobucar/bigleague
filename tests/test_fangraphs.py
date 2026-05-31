@@ -85,7 +85,7 @@ async def test_leaderboard_mixed_int_then_float_builds_float64(
     (past the default inference window) must build as Float64, not raise
     ComputeError or truncate the float to 0."""
     # 150 int rows then one float row — float lands outside the 100-row window.
-    data = [{"Name": f"P{i}", "Team": "NYY", "WAR": i} for i in range(150)]
+    data: list[dict[str, Any]] = [{"Name": f"P{i}", "Team": "NYY", "WAR": i} for i in range(150)]
     data.append({"Name": "Late", "Team": "BOS", "WAR": 0.000838})
     _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(200, {"data": data})))
 
