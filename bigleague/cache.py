@@ -30,12 +30,21 @@ except ImportError:
 _DEFAULT_CACHE_DIR = Path("~/.bigleague/cache").expanduser()
 
 
+def resolve_cache_dir() -> Path:
+    """The directory all of bigleague's on-disk caches live under.
+
+    `BIGLEAGUE_CACHE_DIR` (expanduser) when set, else `~/.bigleague/cache`.
+    Resolved at call time so the env var is honored regardless of import
+    order, and shared by StatcastCache and the Chadwick register so a single
+    env var configures every cache.
+    """
+    env_dir = os.environ.get("BIGLEAGUE_CACHE_DIR")
+    return Path(env_dir).expanduser() if env_dir else _DEFAULT_CACHE_DIR
+
+
 class StatcastCache:
     def __init__(self, cache_dir: Path | None = None) -> None:
-        env_dir = os.environ.get("BIGLEAGUE_CACHE_DIR")
-        self.cache_dir = (
-            cache_dir or (Path(env_dir).expanduser() if env_dir else None) or _DEFAULT_CACHE_DIR
-        )
+        self.cache_dir = cache_dir or resolve_cache_dir()
         self.bloom: ClassicalFilter | None = (
             ClassicalFilter.from_false_pos(0.01, 10_000) if ClassicalFilter else None
         )

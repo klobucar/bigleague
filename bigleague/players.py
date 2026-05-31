@@ -1,22 +1,31 @@
 """Player ID resolution against the Chadwick Bureau register.
 
 The register is a 2 MB CSV that changes infrequently — we cache it as a
-parquet under the same `~/.bigleague/cache` tree the Statcast cache uses.
-The first call downloads; subsequent calls read parquet from disk.
+parquet under the same cache tree the Statcast cache uses (resolved via
+`cache.resolve_cache_dir`, so `BIGLEAGUE_CACHE_DIR` / `BIGLEAGUE_NO_CACHE`
+configure it identically). The first call downloads; subsequent calls read
+parquet from disk unless caching is disabled.
 """
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
+import os
 from io import BytesIO
 from pathlib import Path
 
 import polars as pl
 
+from bigleague.cache import resolve_cache_dir
 from bigleague.http import get_client
 
-_REGISTER_URL = "https://github.com/chadwickbureau/register/raw/master/data/people.csv"
-_REGISTER_PATH = Path("~/.bigleague/cache/chadwick_people.parquet").expanduser()
+# Chadwick no longer ships a single people.csv — the register is split into
+# 16 shards (people-0.csv … people-f.csv) keyed by the first hex digit of the
+# person UUID. We fetch them concurrently and concat into one frame.
+_REGISTER_BASE = "https://github.com/chadwickbureau/register/raw/master/data"
+_REGISTER_SHARDS = tuple(f"people-{c}.csv" for c in "0123456789abcdef")
+_REGISTER_FILENAME = "chadwick_people.parquet"
 
 _REGISTER_COLS = (
     "name_last",
@@ -29,21 +38,44 @@ _REGISTER_COLS = (
 )
 
 
-async def _load_register() -> pl.DataFrame:
-    if _REGISTER_PATH.exists():
-        return pl.read_parquet(_REGISTER_PATH)
+def _register_path() -> Path:
+    """Where the cached register parquet lives, resolved at call time."""
+    return resolve_cache_dir() / _REGISTER_FILENAME
 
+
+async def _fetch_shard(shard: str) -> pl.DataFrame:
     client = await get_client()
-    resp = await client.get(_REGISTER_URL)
+    resp = await client.get(f"{_REGISTER_BASE}/{shard}")
     resp.raise_for_status()
-
-    df = pl.read_csv(
+    return pl.read_csv(
         BytesIO(resp.content),
         columns=list(_REGISTER_COLS),
         infer_schema_length=10_000,
     )
-    _REGISTER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(_REGISTER_PATH)
+
+
+async def _fetch_register() -> pl.DataFrame:
+    """Download all register shards concurrently and concat them.
+
+    `vertical_relaxed` reconciles per-shard dtype inference (e.g. a shard
+    where every key_mlbam is null infers a narrower type than its peers).
+    """
+    frames = await asyncio.gather(*(_fetch_shard(s) for s in _REGISTER_SHARDS))
+    return pl.concat(frames, how="vertical_relaxed")
+
+
+async def _load_register() -> pl.DataFrame:
+    # Honor BIGLEAGUE_NO_CACHE like StatcastCache: never touch disk, always
+    # fetch fresh.
+    no_cache = bool(os.environ.get("BIGLEAGUE_NO_CACHE"))
+    path = _register_path()
+    if not no_cache and path.exists():
+        return pl.read_parquet(path)
+
+    df = await _fetch_register()
+    if not no_cache:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.write_parquet(path)
     return df
 
 
