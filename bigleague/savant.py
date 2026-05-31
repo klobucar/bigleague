@@ -26,6 +26,29 @@ _SAVANT_BASE = "https://baseballsavant.mlb.com"
 _STATCAST_CSV = f"{_SAVANT_BASE}/statcast_search/csv"
 _CHUNK_DAYS = 7
 
+# Map common user-typed abbreviations onto the codes Savant actually uses.
+# Savant's team filters are case-insensitive but NOT alias-tolerant for these:
+# querying "CHW"/"KCR"/"SDP"/"SFG"/"TBR"/"WSN"/"WAS" returns an empty frame,
+# so they must be rewritten to Savant's form. Shared with bigleague.abs, which
+# matches the same scheme on its leaderboard team_abbr column.
+_TEAM_TO_SAVANT: dict[str, str] = {
+    "ARI": "AZ",
+    "OAK": "ATH",
+    "KCR": "KC",
+    "SDP": "SD",
+    "SFG": "SF",
+    "TBR": "TB",
+    "CHW": "CWS",
+    "WSN": "WSH",
+    "WAS": "WSH",
+}
+
+
+def normalize_team(abbr: str) -> str:
+    """Normalize a user-typed team abbreviation to the form Savant uses."""
+    up = abbr.strip().upper()
+    return _TEAM_TO_SAVANT.get(up, up)
+
 
 # ---------------------------------------------------------------------------
 # Pitch-level (chunked + cached + concurrent)
@@ -134,6 +157,10 @@ async def statcast(
     """League-wide pitch data for a date range. Optional team filter."""
     params = dict(_BASE_PARAMS)
     if team:
+        # Savant rejects several common aliases (CHW, KCR, SDP, ...) with an
+        # empty frame; normalize to its codes so statcast(..., team="CHW")
+        # works. Also dedupes the cache scope across "nyy"/"NYY".
+        team = normalize_team(team)
         params["team"] = team
     scope = team or "all"
     return await _fetch_many(_chunks(start, end), params, "statcast", scope)

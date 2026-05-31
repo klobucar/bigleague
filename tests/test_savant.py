@@ -92,6 +92,24 @@ async def test_statcast_omits_player_params_when_no_filter() -> None:
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("nyy", "NYY"),  # case-folded (and dedupes the cache scope)
+        ("CHW", "CWS"),  # alias Savant rejects → its real code
+        ("WSN", "WSH"),
+        ("ARI", "AZ"),
+    ],
+)
+async def test_statcast_normalizes_team_filter(given: str, expected: str) -> None:
+    """The team filter is normalized to Savant's codes before it goes out:
+    Savant returns an empty frame for aliases like CHW/KCR/SDP/WSN."""
+    route = respx.get(_CSV_URL).mock(return_value=httpx.Response(200, content=_fake_csv_body()))
+    await savant.statcast(date(2024, 4, 1), date(2024, 4, 2), team=given)
+    assert route.calls[0].request.url.params["team"] == expected
+
+
+@respx.mock
 async def test_statcast_batter_includes_player_params() -> None:
     route = respx.get(_CSV_URL).mock(return_value=httpx.Response(200, content=_fake_csv_body()))
     await savant.statcast_batter(660271, date(2024, 4, 1), date(2024, 4, 2))

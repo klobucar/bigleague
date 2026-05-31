@@ -26,6 +26,11 @@ import polars as pl
 
 from bigleague.http import savant_get
 
+# The user-abbrev → Savant-code normalizer lives in bigleague.savant (both
+# modules hit Baseball Savant and share the same code scheme); re-exported
+# here so bigleague.abs.normalize_team stays a stable part of this surface.
+from bigleague.savant import normalize_team
+
 _SAVANT_BASE = "https://baseballsavant.mlb.com"
 _ABS_PATH = "/leaderboard/abs-challenges"
 
@@ -35,26 +40,6 @@ ROLE_PITCHER = "pitcher"
 ROLE_CATCHER = "catcher"
 ROLE_TEAM_SUMMARY = "team-summary"
 PLAYER_ROLES: tuple[str, ...] = (ROLE_BATTER, ROLE_PITCHER, ROLE_CATCHER)
-
-# Map common user-typed abbreviations onto the ones Savant uses in its CSV.
-# Most line up; these are the ones that don't.
-_TEAM_TO_SAVANT: dict[str, str] = {
-    "ARI": "AZ",
-    "OAK": "ATH",
-    "KCR": "KC",
-    "SDP": "SD",
-    "SFG": "SF",
-    "TBR": "TB",
-    "CHW": "CWS",
-    "WSN": "WSH",
-    "WAS": "WSH",
-}
-
-
-def normalize_team(abbr: str) -> str:
-    """Normalize a user-typed team abbreviation to the form Savant uses."""
-    up = abbr.strip().upper()
-    return _TEAM_TO_SAVANT.get(up, up)
 
 
 def _parse_csv(body: bytes) -> pl.DataFrame:
