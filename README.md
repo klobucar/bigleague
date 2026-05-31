@@ -15,9 +15,11 @@ library.
   are drawn from scratch with matplotlib patches. No CSV scraping.
 - **curl_cffi for FanGraphs.** Cloudflare has gated fangraphs.com to plain
   TLS clients since mid-2025; Chrome impersonation is load-bearing.
-- **Bloom-gated parquet cache.** Sub-microsecond miss check. The right edge
-  of the cache (chunks containing today's date) is intentionally NOT cached
-  to avoid serving stale partial data.
+- **Parquet cache, optional bloom accelerator.** Parquet on disk. With the
+  optional `bloom` extra installed, a bloom filter adds a sub-microsecond
+  negative-lookup shortcut; without it the cache works the same, just without
+  that shortcut. The right edge of the cache (chunks containing today's date)
+  is intentionally NOT cached to avoid serving stale partial data.
 
 ## Benchmarks
 
@@ -66,6 +68,14 @@ uv sync --extra dev
 
 Requires Python ≥ 3.12. Tested on 3.14.
 
+The `bloom` extra (the `bouquet` filter) is an **optional** runtime
+accelerator, not a dev requirement — the suite skips bloom-only tests when
+it's absent. To exercise that path locally:
+
+```bash
+uv sync --extra dev --extra bloom
+```
+
 ## Quick start
 
 ```python
@@ -109,7 +119,7 @@ game = await bl.next_game("NYY")
 
 | Aspect | Behavior |
 | --- | --- |
-| Backend | bloom filter + parquet on disk |
+| Backend | parquet on disk; optional bloom-filter accelerator (`bloom` extra) |
 | Default location | `~/.bigleague/cache` |
 | Override | `BIGLEAGUE_CACHE_DIR=/path` |
 | Disable | `BIGLEAGUE_NO_CACHE=1` |
@@ -175,7 +185,7 @@ bigleague/
 ├── models.py     # StatcastPitch dataclass — schema source of truth
 ├── schema.py     # polars dtype map derived from models
 ├── http.py       # shared async client, semaphore, retries
-├── cache.py      # bloom + parquet
+├── cache.py      # parquet (+ optional bloom)
 ├── stadiums.py   # stadium data + normalization
 ├── stats.py      # pure polars computation (no I/O)
 ├── players.py    # Chadwick Bureau lookup

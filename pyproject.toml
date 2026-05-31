@@ -1,3 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+# Only the bigleague package ships; bench/ and tests/ are dev-only and would
+# otherwise trip setuptools' flat-layout auto-discovery when bigleague is
+# installed as a path dependency (e.g. by harry-bot).
+[tool.setuptools]
+packages = ["bigleague"]
+
 [project]
 name = "bigleague"
 version = "0.1.0"
@@ -13,7 +23,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional runtime accelerator: gates negative cache lookups behind a
+# bloom filter. The library degrades gracefully without it (see cache.py).
 bloom = ["bouquet"]
+# `dev` deliberately omits bouquet — it's an optional accelerator, not a
+# dev requirement, and the suite skips bloom-only tests when it's absent.
+# To exercise the bloom path locally: `uv sync --extra dev --extra bloom`.
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
@@ -22,7 +37,6 @@ dev = [
     "vcrpy>=6",
     "ruff>=0.7",
     "ty>=0.0.1",
-    "bouquet",
 ]
 
 [tool.pytest.ini_options]

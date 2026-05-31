@@ -6,7 +6,13 @@ from unittest.mock import patch
 
 import polars as pl
 import pytest
-from bigleague.cache import StatcastCache
+from bigleague.cache import ClassicalFilter, StatcastCache
+
+# bouquet is an optional extra; bloom-specific behaviour can't be exercised
+# (or even asserted on) when it isn't installed.
+requires_bloom = pytest.mark.skipif(
+    ClassicalFilter is None, reason="bouquet not installed (install the `bloom` extra)"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +32,7 @@ def test_no_cache_env_bypasses_disk(tmp_path: Path) -> None:
         del os.environ["BIGLEAGUE_NO_CACHE"]
 
 
+@requires_bloom
 def test_definite_miss_skips_disk_check(tmp_path: Path) -> None:
     c = StatcastCache(tmp_path)
     with patch.object(Path, "exists", autospec=True) as mock_exists:
@@ -43,6 +50,7 @@ def test_set_then_get_round_trips(tmp_path: Path) -> None:
     assert got.equals(df)
 
 
+@requires_bloom
 def test_seed_bloom_does_not_read_parquet(tmp_path: Path) -> None:
     # Pre-populate the cache dir
     c1 = StatcastCache(tmp_path)
@@ -61,9 +69,12 @@ def test_clear_removes_files_and_resets_bloom(tmp_path: Path) -> None:
     c.set("b", pl.DataFrame({"x": [2]}))
     c.clear()
     assert not list(tmp_path.glob("*.parquet"))
-    assert c.bloom is not None
-    assert b"a" not in c.bloom
-    assert b"b" not in c.bloom
+    if ClassicalFilter is not None:
+        assert c.bloom is not None
+        assert b"a" not in c.bloom
+        assert b"b" not in c.bloom
+    else:
+        assert c.bloom is None
 
 
 def test_size_returns_total_parquet_bytes(tmp_path: Path) -> None:
@@ -75,8 +86,27 @@ def test_size_returns_total_parquet_bytes(tmp_path: Path) -> None:
     assert c.size() > 0
 
 
+@requires_bloom
 def test_false_positive_falls_through_to_disk_miss(tmp_path: Path) -> None:
     c = StatcastCache(tmp_path)
     assert c.bloom is not None
     c.bloom.insert(b"ghost")  # bloom says yes but no file exists
     assert c.get("ghost") is None
+
+
+def test_cache_works_without_bloom(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With bouquet absent, the cache still round-trips — just no negative
+    shortcut, so every lookup falls through to a real disk check."""
+    # `bigleague.__init__` rebinds the name `cache` to the StatcastCache
+    # instance, shadowing the submodule — reach it via sys.modules.
+    import sys
+
+    monkeypatch.setattr(sys.modules["bigleague.cache"], "ClassicalFilter", None)
+    c = StatcastCache(tmp_path)
+    assert c.bloom is None
+    df = pl.DataFrame({"a": [1, 2, 3]})
+    c.set("k", df)
+    got = c.get("k")
+    assert got is not None
+    assert got.equals(df)
+    assert c.get("missing") is None
