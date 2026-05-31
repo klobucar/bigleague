@@ -10,6 +10,7 @@ re-exported at the top level — they would collide with the
 
 from __future__ import annotations
 
+from bigleague import abs
 from bigleague.cache import StatcastCache, cache
 from bigleague.fangraphs import (
     FangraphsBlockedError,
@@ -22,6 +23,7 @@ from bigleague.fangraphs import (
     pitching_stats_range,
     player_stats,
     player_stats_for_year,
+    playoff_odds,
     team_batting,
     team_pitching,
     top_leaderboard,
@@ -100,6 +102,7 @@ __all__ = [
     "FangraphsBlockedError",
     "StatcastCache",
     "StatcastPitch",
+    "abs",
     "aggregate_career",
     "batter_exit_velo",
     "batter_expected_stats",
@@ -138,6 +141,7 @@ __all__ = [
     "pitching_stats_range",
     "player_stats",
     "player_stats_for_year",
+    "playoff_odds",
     "recent_results",
     "resolve_id",
     "reverse_lookup",

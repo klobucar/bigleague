@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
+import polars as pl
 import pytest
 from bigleague import fangraphs
 
@@ -13,6 +15,22 @@ def _fake_resp(status: int = 200, payload: dict[str, Any] | None = None) -> Magi
     resp.json.return_value = payload or {"data": []}
     resp.raise_for_status.return_value = None
     return resp
+
+
+def _fake_html_resp(html: str, status: int = 200) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status
+    resp.text = html
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+def _next_data_html(queries: list[dict[str, Any]]) -> str:
+    payload = {"props": {"pageProps": {"dehydratedState": {"queries": queries}}}}
+    return (
+        '<html><body><script id="__NEXT_DATA__" type="application/json">'
+        f"{json.dumps(payload)}</script></body></html>"
+    )
 
 
 def _patch_cc(monkeypatch: pytest.MonkeyPatch, mock_get: Any) -> None:
@@ -118,3 +136,87 @@ async def test_top_leaderboard_sorts_descending(monkeypatch: pytest.MonkeyPatch)
     out = await fangraphs.top_leaderboard("HR", 2024, n=3, player_type="batter")
     assert [r["name"] for r in out] == ["A", "C", "B"]
     assert out[0]["rank"] == 1
+
+
+# --- playoff odds ----------------------------------------------------------
+
+
+def _odds_query(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"queryHash": json.dumps(["playoff-odds", "div", "fg"]), "state": {"data": rows}}
+
+
+async def test_playoff_odds_parses_next_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [
+        {
+            "abbName": "NYY",
+            "shortName": "Yankees",
+            "W": 50,
+            "L": 30,
+            "Wpct": 0.625,
+            "GB": 0.0,
+            "endData": {
+                "ExpW": 95,
+                "ExpL": 67,
+                "rosW": 0.50,
+                "poffTitle": 0.99,
+                "divTitle": 0.80,
+                "wcTitle": 0.19,
+                "wsWin": 0.15,
+            },
+        },
+        {
+            "abbName": "BOS",
+            "shortName": "Red Sox",
+            "W": 45,
+            "L": 35,
+            "Wpct": 0.563,
+            "GB": 5.0,
+            "endData": {
+                "ExpW": 88,
+                "ExpL": 74,
+                "rosW": 0.42,
+                "poffTitle": 0.65,
+                "divTitle": 0.18,
+                "wcTitle": 0.47,
+                "wsWin": 0.06,
+            },
+        },
+    ]
+    # A decoy query without "playoff-odds" must be skipped.
+    html = _next_data_html(
+        [
+            {"queryHash": json.dumps(["standings"]), "state": {"data": []}},
+            _odds_query(rows),
+        ]
+    )
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_html_resp(html)))
+
+    df = await fangraphs.playoff_odds()
+    assert df.height == 2
+    assert set(df.columns) == {
+        "abbName", "shortName", "W", "L", "Wpct", "GB", "exp_w", "exp_l",
+        "ros_pct", "playoff_pct", "division_pct", "wildcard_pct", "ws_pct",
+    }  # fmt: skip
+    nyy = df.filter(pl.col("abbName") == "NYY").row(0, named=True)
+    assert nyy["shortName"] == "Yankees"
+    assert nyy["exp_w"] == 95
+    # Probabilities stay as raw [0, 1] fractions — caller scales to %.
+    assert nyy["playoff_pct"] == 0.99
+    assert nyy["ws_pct"] == 0.15
+    assert nyy["division_pct"] == 0.80
+    assert nyy["wildcard_pct"] == 0.19
+
+
+async def test_playoff_odds_layout_changed_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    # __NEXT_DATA__ present, but no query mentions playoff-odds.
+    html = _next_data_html([{"queryHash": json.dumps(["standings"]), "state": {"data": []}}])
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_html_resp(html)))
+
+    with pytest.raises(ValueError, match="layout may have changed"):
+        await fangraphs.playoff_odds()
+
+
+async def test_playoff_odds_403_raises_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(403)))
+    with pytest.raises(fangraphs.FangraphsBlockedError):
+        await fangraphs.playoff_odds()

@@ -16,6 +16,7 @@ fit cleanly in async caller code.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -36,7 +37,9 @@ _BATTING_KEYS: list[str] = [
 ]  # fmt: skip
 
 _FG_API_URL = "https://www.fangraphs.com/api/leaders/major-league/data"
+_FG_ODDS_URL = "https://www.fangraphs.com/standings/playoff-odds/fg/div"
 _FG_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)
 
 _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY = 0.75
@@ -79,14 +82,19 @@ def _strip_html(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def _fg_get(params: dict[str, Any]) -> dict[str, Any]:
-    """Synchronous FanGraphs GET with curl_cffi + Chrome impersonation."""
+def _cc_get(url: str, params: dict[str, Any] | None = None) -> Any:
+    """GET a FanGraphs URL through curl_cffi + Chrome impersonation.
+
+    Shared by the JSON API and the Next.js-rendered odds page: 403 becomes a
+    FangraphsBlockedError (Cloudflare gate), 5xx/connection errors retry with
+    exponential backoff, everything else returns the raw curl_cffi response.
+    """
     from curl_cffi import requests as cc_requests
 
     resp = None
     for attempt in range(_RETRY_ATTEMPTS):
         try:
-            resp = cc_requests.get(_FG_API_URL, params=params, impersonate="chrome", timeout=20)
+            resp = cc_requests.get(url, params=params, impersonate="chrome", timeout=20)
         except Exception as exc:
             if attempt < _RETRY_ATTEMPTS - 1:
                 log.warning(
@@ -117,7 +125,12 @@ def _fg_get(params: dict[str, Any]) -> dict[str, Any]:
     if resp is None:
         raise RuntimeError("unreachable")
     resp.raise_for_status()
-    payload = resp.json()
+    return resp
+
+
+def _fg_get(params: dict[str, Any]) -> dict[str, Any]:
+    """Synchronous FanGraphs JSON-API GET."""
+    payload = _cc_get(_FG_API_URL, params).json()
     return payload if isinstance(payload, dict) else {"data": payload}
 
 
@@ -401,3 +414,91 @@ async def top_leaderboard(
         f"Stat '{stat}' not found in FanGraphs leaderboards for {year}. "
         "Try a column name like ERA, WAR, HR, K%, OPS, wRC+, FIP, WHIP."
     )
+
+
+# ---------------------------------------------------------------------------
+# Playoff odds (Next.js-rendered page)
+# ---------------------------------------------------------------------------
+
+
+def _parse_playoff_odds(html: str) -> list[dict[str, Any]]:
+    """Pull the playoff-odds team rows out of the embedded __NEXT_DATA__ blob.
+
+    The page dehydrates a react-query cache into <script id="__NEXT_DATA__">.
+    We walk props → pageProps → dehydratedState → queries and pick the query
+    whose queryHash (a JSON-encoded array) mentions "playoff-odds"; its
+    state.data is the list of team rows. Raises ValueError if no such query /
+    rows are present (the layout changed out from under us).
+    """
+    match = _NEXT_DATA_RE.search(html)
+    if not match:
+        raise ValueError(
+            "FanGraphs odds page had no __NEXT_DATA__ blob — site layout may have changed."
+        )
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise ValueError("FanGraphs odds __NEXT_DATA__ blob was not valid JSON.") from exc
+
+    queries = (
+        payload.get("props", {}).get("pageProps", {}).get("dehydratedState", {}).get("queries", [])
+    )
+    for q in queries:
+        qhash = q.get("queryHash") or ""
+        # queryHash is a JSON-encoded array; a plain substring search works
+        # whether it's still a string or already decoded into a list.
+        flat = qhash if isinstance(qhash, str) else json.dumps(qhash)
+        if "playoff-odds" not in flat:
+            continue
+        data = q.get("state", {}).get("data")
+        if isinstance(data, list) and data and isinstance(data[0], dict) and "abbName" in data[0]:
+            return data
+
+    raise ValueError(
+        "FanGraphs returned the playoff odds page but no team rows were found — "
+        "site layout may have changed."
+    )
+
+
+def _playoff_odds_sync() -> pl.DataFrame:
+    resp = _cc_get(_FG_ODDS_URL)
+    html = getattr(resp, "text", None)
+    if html is None:  # curl_cffi may only expose bytes
+        html = resp.content.decode("utf-8", errors="replace")
+    records: list[dict[str, Any]] = []
+    for row in _parse_playoff_odds(html):
+        end = row.get("endData") or {}
+        records.append(
+            {
+                "abbName": row.get("abbName"),
+                "shortName": row.get("shortName"),
+                "W": row.get("W"),
+                "L": row.get("L"),
+                "Wpct": row.get("Wpct"),
+                "GB": row.get("GB"),
+                "exp_w": end.get("ExpW"),
+                "exp_l": end.get("ExpL"),
+                "ros_pct": end.get("rosW"),
+                "playoff_pct": end.get("poffTitle"),
+                "division_pct": end.get("divTitle"),
+                "wildcard_pct": end.get("wcTitle"),
+                "ws_pct": end.get("wsWin"),
+            }
+        )
+    # strict=False so a mixed-type column (e.g. GB rendered as "-" for a
+    # division leader alongside numeric gaps) doesn't blow up construction.
+    return pl.DataFrame(records, strict=False)
+
+
+async def playoff_odds() -> pl.DataFrame:
+    """FanGraphs playoff odds — one row per team.
+
+    Probability fields stay as raw [0, 1] fractions (the caller scales to %).
+    Columns: abbName, shortName, W, L, Wpct, GB, exp_w (ExpW), exp_l (ExpL),
+    ros_pct (rosW), playoff_pct (poffTitle), division_pct (divTitle),
+    wildcard_pct (wcTitle), ws_pct (wsWin).
+
+    Raises FangraphsBlockedError on a Cloudflare 403, and ValueError if the
+    __NEXT_DATA__ blob is present but no playoff-odds rows are found.
+    """
+    return await asyncio.to_thread(_playoff_odds_sync)
