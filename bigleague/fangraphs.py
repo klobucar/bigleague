@@ -82,6 +82,18 @@ def _strip_html(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
+def _rows_to_df(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    """Build a frame from FanGraphs JSON records, stripping anchor tags.
+
+    `infer_schema_length=None` scans every row before picking column dtypes:
+    FanGraphs ships a column as a bare int in early rows and a float later
+    (e.g. a rate that's 0 up top, 0.000838 further down), and the default
+    100-row inference window would lock in Int64 and then fail to append the
+    float. Inferring across all rows types it Float64 and keeps the value
+    (strict=False would instead truncate the float to 0)."""
+    return _strip_html(pl.DataFrame(rows, infer_schema_length=None))
+
+
 def _cc_get(url: str, params: dict[str, Any] | None = None) -> Any:
     """GET a FanGraphs URL through curl_cffi + Chrome impersonation.
 
@@ -157,7 +169,7 @@ def _fetch_leaderboard_sync(
     rows = _fg_get(params).get("data") or []
     if not rows:
         return pl.DataFrame()
-    return _strip_html(pl.DataFrame(rows))
+    return _rows_to_df(rows)
 
 
 def _fetch_leaderboard_range_sync(
@@ -185,7 +197,7 @@ def _fetch_leaderboard_range_sync(
     rows = _fg_get(params).get("data") or []
     if not rows:
         return pl.DataFrame()
-    return _strip_html(pl.DataFrame(rows))
+    return _rows_to_df(rows)
 
 
 def _fetch_fielding_sync(
@@ -209,7 +221,7 @@ def _fetch_fielding_sync(
     rows = _fg_get(params).get("data") or []
     if not rows:
         return pl.DataFrame()
-    return _strip_html(pl.DataFrame(rows))
+    return _rows_to_df(rows)
 
 
 def _fetch_team_sync(
@@ -234,7 +246,7 @@ def _fetch_team_sync(
     rows = _fg_get(params).get("data") or []
     if not rows:
         return pl.DataFrame()
-    return _strip_html(pl.DataFrame(rows))
+    return _rows_to_df(rows)
 
 
 # ---------------------------------------------------------------------------

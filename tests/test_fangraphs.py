@@ -78,6 +78,24 @@ async def test_html_anchor_tags_stripped(monkeypatch: pytest.MonkeyPatch) -> Non
     assert df["Team"][0] == "NYY"
 
 
+async def test_leaderboard_mixed_int_then_float_builds_float64(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a column that's int in early rows but float in a later row
+    (past the default inference window) must build as Float64, not raise
+    ComputeError or truncate the float to 0."""
+    # 150 int rows then one float row — float lands outside the 100-row window.
+    data = [{"Name": f"P{i}", "Team": "NYY", "WAR": i} for i in range(150)]
+    data.append({"Name": "Late", "Team": "BOS", "WAR": 0.000838})
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(200, {"data": data})))
+
+    df = await fangraphs.leaderboard(2024, "bat")
+    assert df["WAR"].dtype == pl.Float64
+    assert df.height == 151
+    # The float survives rather than being coerced to 0.
+    assert df.filter(pl.col("Name") == "Late")["WAR"][0] == 0.000838
+
+
 async def test_player_stats_auto_detects_pitcher(monkeypatch: pytest.MonkeyPatch) -> None:
     pitch_payload = {"data": [{"Name": "Gerrit Cole", "Team": "NYY", "ERA": 3.5, "WAR": 5.0}]}
     bat_payload = {"data": []}
