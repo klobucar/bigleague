@@ -23,7 +23,10 @@ from bigleague.http import get_client
 # Chadwick no longer ships a single people.csv — the register is split into
 # 16 shards (people-0.csv … people-f.csv) keyed by the first hex digit of the
 # person UUID. We fetch them concurrently and concat into one frame.
-_REGISTER_BASE = "https://github.com/chadwickbureau/register/raw/master/data"
+#
+# Hit raw.githubusercontent.com directly: the github.com/.../raw/... path 302s
+# here, and our shared httpx client doesn't follow redirects.
+_REGISTER_BASE = "https://raw.githubusercontent.com/chadwickbureau/register/master/data"
 _REGISTER_SHARDS = tuple(f"people-{c}.csv" for c in "0123456789abcdef")
 _REGISTER_FILENAME = "chadwick_people.parquet"
 
