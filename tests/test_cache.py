@@ -41,6 +41,23 @@ def test_definite_miss_skips_disk_check(tmp_path: Path) -> None:
     mock_exists.assert_not_called()
 
 
+def test_no_cache_at_construction_then_unset_is_honored_per_call(tmp_path: Path) -> None:
+    """Regression: NO_CACHE at construction used to skip mkdir + bloom
+    seeding forever; unsetting it later must give a fully working cache."""
+    target = tmp_path / "sub"
+    os.environ["BIGLEAGUE_NO_CACHE"] = "1"
+    try:
+        c = StatcastCache(target)
+        assert c.get("k") is None
+    finally:
+        del os.environ["BIGLEAGUE_NO_CACHE"]
+    df = pl.DataFrame({"a": [1]})
+    c.set("k", df)
+    got = c.get("k")
+    assert got is not None
+    assert got.equals(df)
+
+
 def test_set_then_get_round_trips(tmp_path: Path) -> None:
     c = StatcastCache(tmp_path)
     df = pl.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
@@ -55,12 +72,24 @@ def test_seed_bloom_does_not_read_parquet(tmp_path: Path) -> None:
     # Pre-populate the cache dir
     c1 = StatcastCache(tmp_path)
     c1.set("a", pl.DataFrame({"x": [1]}))
-    # New cache instance — should seed bloom from filenames only
+    # New cache instance — seeding is lazy (first real use) and must come
+    # from filenames only, never parquet contents.
     with patch("bigleague.cache.pl.read_parquet") as mock_read:
         c2 = StatcastCache(tmp_path)
+        assert c2.get("definitely_missing_key") is None  # triggers seeding
     mock_read.assert_not_called()
     assert c2.bloom is not None
     assert b"a" in c2.bloom
+
+
+def test_init_touches_no_filesystem(tmp_path: Path) -> None:
+    """Constructing a cache (e.g. the import-time global) must not mkdir;
+    the dir is created on demand at write time."""
+    target = tmp_path / "nested" / "cache"
+    c = StatcastCache(target)
+    assert not target.exists()
+    c.set("k", pl.DataFrame({"a": [1]}))
+    assert (target / "k.parquet").exists()
 
 
 def test_clear_removes_files_and_resets_bloom(tmp_path: Path) -> None:

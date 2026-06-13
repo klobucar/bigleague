@@ -143,8 +143,12 @@ def _parse_csv(body: bytes) -> pl.DataFrame:
 
 
 async def _fetch_chunk(params: dict[str, str], cache_key: str) -> pl.DataFrame:
-    """Fetch one chunk with cache check + opportunistic write-through."""
-    cached = cache.get(cache_key)
+    """Fetch one chunk with cache check + opportunistic write-through.
+
+    Cache reads/writes are multi-MB sync parquet I/O — run them in a
+    thread so they don't block the event loop.
+    """
+    cached = await asyncio.to_thread(cache.get, cache_key)
     if cached is not None:
         return cached
     resp = await savant_get(_STATCAST_CSV, params)
@@ -158,7 +162,7 @@ async def _fetch_chunk(params: dict[str, str], cache_key: str) -> pl.DataFrame:
     except ValueError:
         chunk_end = date.today()  # be conservative
     if chunk_end < date.today():
-        cache.set(cache_key, df)
+        await asyncio.to_thread(cache.set, cache_key, df)
     return df
 
 

@@ -75,22 +75,27 @@ async def _fetch_register() -> pl.DataFrame:
     return pl.concat(frames, how="vertical_relaxed")
 
 
+def _write_register_sync(df: pl.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Temp-file + atomic rename so a crash mid-write can't leave a
+    # truncated parquet that breaks every subsequent load.
+    tmp = path.with_suffix(".parquet.tmp")
+    df.write_parquet(tmp)
+    tmp.replace(path)
+
+
 async def _load_register() -> pl.DataFrame:
     # Honor BIGLEAGUE_NO_CACHE like StatcastCache: never touch disk, always
-    # fetch fresh.
+    # fetch fresh. Parquet reads/writes are blocking multi-MB I/O — run
+    # them in a thread so they don't stall the event loop.
     no_cache = bool(os.environ.get("BIGLEAGUE_NO_CACHE"))
     path = _register_path()
     if not no_cache and path.exists():
-        return pl.read_parquet(path)
+        return await asyncio.to_thread(pl.read_parquet, path)
 
     df = await _fetch_register()
     if not no_cache:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Temp-file + atomic rename so a crash mid-write can't leave a
-        # truncated parquet that breaks every subsequent load.
-        tmp = path.with_suffix(".parquet.tmp")
-        df.write_parquet(tmp)
-        tmp.replace(path)
+        await asyncio.to_thread(_write_register_sync, df, path)
     return df
 
 
