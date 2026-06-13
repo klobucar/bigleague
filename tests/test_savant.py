@@ -225,6 +225,40 @@ async def test_future_chunk_not_cached(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert not list(tmp_path.glob("*.parquet"))
 
 
+_PCT_URL = "https://baseballsavant.mlb.com/leaderboard/percentile-rankings"
+
+
+@respx.mock
+@pytest.mark.parametrize("fn_name", ["batter_percentile_ranks", "pitcher_percentile_ranks"])
+async def test_percentile_ranks_filter_to_requested_player(fn_name: str) -> None:
+    """Regression: player_id was accepted but ignored — the full leaderboard
+    came back and callers had to filter it themselves."""
+    csv = b"player_id,xwoba,k_percent\n1,90,80\n2,50,40\n"
+    respx.get(_PCT_URL).mock(return_value=httpx.Response(200, content=csv))
+    df = await getattr(savant, fn_name)(1, 2024)
+    assert df.height == 1
+    assert df["player_id"].to_list() == [1]
+    assert df["xwoba"].to_list() == [90]
+
+
+@respx.mock
+async def test_percentile_ranks_without_id_column_return_full_frame() -> None:
+    """If Savant renames the id column we degrade to the old behavior
+    (full frame) instead of erroring or silently dropping all rows."""
+    csv = b"mlbam_id,xwoba\n1,90\n2,50\n"
+    respx.get(_PCT_URL).mock(return_value=httpx.Response(200, content=csv))
+    df = await savant.batter_percentile_ranks(1, 2024)
+    assert df.height == 2
+
+
+def test_running_splits_is_deprecated_alias_for_sprint_speed() -> None:
+    import bigleague
+
+    assert savant.running_splits is savant.sprint_speed
+    assert bigleague.sprint_speed is savant.sprint_speed
+    assert bigleague.running_splits is savant.sprint_speed
+
+
 @pytest.mark.skipif(
     "BIGLEAGUE_NETWORK_TESTS" not in __import__("os").environ,
     reason="set BIGLEAGUE_NETWORK_TESTS=1 to run live Savant calls",

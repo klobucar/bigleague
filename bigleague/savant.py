@@ -257,24 +257,33 @@ async def _csv_leaderboard(path: str, params: dict[str, str]) -> pl.DataFrame:
     return pl.read_csv(BytesIO(resp.content), infer_schema_length=2000, ignore_errors=True)
 
 
+def _filter_by_player_id(df: pl.DataFrame, player_id: int) -> pl.DataFrame:
+    """Filter a leaderboard frame to one player when the id column exists."""
+    if df.is_empty() or "player_id" not in df.columns:
+        return df
+    return df.filter(pl.col("player_id") == player_id)
+
+
 async def batter_percentile_ranks(player_id: int, year: int) -> pl.DataFrame:
     """Percentile ranks for a single batter.
 
-    Savant only exposes the full leaderboard CSV; we fetch all batters
-    and let the caller filter by player_id (`stats.parse_percentile_ranks`
-    handles that).
+    Savant only exposes the full leaderboard CSV; we fetch all batters and
+    filter to `player_id` (empty frame if the player isn't on the board).
     """
-    return await _csv_leaderboard(
+    df = await _csv_leaderboard(
         "/leaderboard/percentile-rankings",
         {"type": "batter", "year": str(year), "csv": "true"},
     )
+    return _filter_by_player_id(df, player_id)
 
 
 async def pitcher_percentile_ranks(player_id: int, year: int) -> pl.DataFrame:
-    return await _csv_leaderboard(
+    """Percentile ranks for a single pitcher (filtered from leaderboard)."""
+    df = await _csv_leaderboard(
         "/leaderboard/percentile-rankings",
         {"type": "pitcher", "year": str(year), "csv": "true"},
     )
+    return _filter_by_player_id(df, player_id)
 
 
 async def pitcher_pitch_arsenal(player_id: int, year: int) -> pl.DataFrame:
@@ -283,9 +292,7 @@ async def pitcher_pitch_arsenal(player_id: int, year: int) -> pl.DataFrame:
         "/leaderboard/pitch-arsenal-stats",
         {"type": "pitcher", "year": str(year), "min": "100", "csv": "true"},
     )
-    if df.is_empty() or "player_id" not in df.columns:
-        return df
-    return df.filter(pl.col("player_id") == player_id)
+    return _filter_by_player_id(df, player_id)
 
 
 async def batter_pitch_arsenal(year: int, min_pa: int = 25) -> pl.DataFrame:
@@ -323,12 +330,15 @@ async def pitcher_expected_stats(year: int, min_ip: int = 0) -> pl.DataFrame:
     )
 
 
-async def running_splits(year: int, min_opp: int = 10) -> pl.DataFrame:
+async def sprint_speed(year: int, min_opp: int = 10) -> pl.DataFrame:
     """Sprint-speed leaderboard."""
     return await _csv_leaderboard(
         "/leaderboard/sprint_speed",
         {"year": str(year), "min_opp": str(min_opp), "csv": "true"},
     )
+
+
+running_splits = sprint_speed  # deprecated alias — this always fetched sprint speed
 
 
 async def pitcher_pitch_movement(year: int, min_p: int = 100) -> pl.DataFrame:
