@@ -86,7 +86,11 @@ async def _load_register() -> pl.DataFrame:
     df = await _fetch_register()
     if not no_cache:
         path.parent.mkdir(parents=True, exist_ok=True)
-        df.write_parquet(path)
+        # Temp-file + atomic rename so a crash mid-write can't leave a
+        # truncated parquet that breaks every subsequent load.
+        tmp = path.with_suffix(".parquet.tmp")
+        df.write_parquet(tmp)
+        tmp.replace(path)
     return df
 
 

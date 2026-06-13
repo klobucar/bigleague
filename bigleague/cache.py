@@ -83,13 +83,27 @@ class StatcastCache:
             return None
         if not path.exists():
             return None
-        return pl.read_parquet(path)
+        try:
+            return pl.read_parquet(path)
+        except (pl.exceptions.PolarsError, OSError):
+            # Corrupt/truncated parquet (e.g. a crash mid-write before the
+            # atomic-rename pattern existed): drop it and treat as a miss
+            # so the cache self-heals instead of raising forever.
+            path.unlink(missing_ok=True)
+            return None
 
     def set(self, key: str, df: pl.DataFrame) -> None:
         if os.environ.get("BIGLEAGUE_NO_CACHE"):
             return
         path = self._key_path(key)
-        df.write_parquet(path)
+        # Write to a temp file in the same directory, then atomically rename
+        # over the final path, so a crash mid-write can never leave a
+        # truncated parquet that poisons every later get(). The temp path is
+        # derived from the containment-validated final path, so it can't
+        # escape cache_dir either.
+        tmp = path.with_suffix(".parquet.tmp")
+        df.write_parquet(tmp)
+        tmp.replace(path)
         if self.bloom is not None:
             self.bloom.insert(key)
 
