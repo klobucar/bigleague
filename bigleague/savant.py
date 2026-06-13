@@ -12,6 +12,7 @@ Leaderboard endpoints are JSON-ish CSV one-shots; no chunking, no cache.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from datetime import date, timedelta
 from io import BytesIO
@@ -86,20 +87,39 @@ def _chunks(start: date, end: date) -> list[tuple[date, date]]:
 def _player_chunks(start: date, end: date) -> list[tuple[date, date]]:
     """Adaptive chunks for single-player queries.
 
-    Player-scoped responses fit comfortably under Savant's ~25k row cap
-    for any realistic range (a full Ohtani season is ~3k rows), so we
-    take the historical portion as one fat request. The right edge —
-    anything from today onward — splits off as its own chunk so the
-    existing right-edge cache guard keeps it from being persisted.
+    The historical portion splits on calendar-year boundaries (Jan 1 -
+    Dec 31, clipped to [start, end]): a full player-season is ~3k rows,
+    so each year-chunk stays comfortably under Savant's ~25k row cap.
+    One fat multi-year request would be silently truncated at the cap —
+    and then cached, making the data loss sticky. Year boundaries are
+    also stable, so historical chunks stay cache-friendly. The right
+    edge — anything from today onward — splits off as its own chunk so
+    the existing right-edge cache guard keeps it from being persisted.
     """
     today = date.today()
-    if end < today or start >= today:
-        return [(start, end)]
-    return [(start, today - timedelta(days=1)), (today, end)]
+    out: list[tuple[date, date]] = []
+    hist_end = min(end, today - timedelta(days=1))
+    cur = start
+    while cur <= hist_end:
+        chunk_end = min(date(cur.year, 12, 31), hist_end)
+        out.append((cur, chunk_end))
+        cur = chunk_end + timedelta(days=1)
+    if end >= today:
+        out.append((max(start, today), end))
+    return out
+
+
+# Schema fingerprint baked into every cache key. Constraint: schema
+# evolution must never mix old and new cached frames — parquet written
+# under an older StatcastPitch schema breaks `pl.concat(...,
+# how="vertical_relaxed")` with freshly fetched frames when columns are
+# added (or silently serves frames missing the new columns). A schema
+# change changes the fingerprint, so old cache files simply go stale-unused.
+_SCHEMA_FINGERPRINT = hashlib.sha256("|".join(STATCAST_SCHEMA).encode()).hexdigest()[:8]
 
 
 def _cache_key(prefix: str, scope: str, start: date, end: date) -> str:
-    return f"{prefix}_{scope}_{start.isoformat()}_{end.isoformat()}"
+    return f"{prefix}_{scope}_{start.isoformat()}_{end.isoformat()}_{_SCHEMA_FINGERPRINT}"
 
 
 def _parse_csv(body: bytes) -> pl.DataFrame:

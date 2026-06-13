@@ -40,6 +40,19 @@ def test_matchup_stats_filters_by_pitcher() -> None:
     assert out["batting_avg"] == pytest.approx(1 / 3)
 
 
+def test_matchup_stats_pa_counts_resolved_events_not_pitches() -> None:
+    """Regression: PA was `matchup.height`, which counts pitches — the frame
+    is pitch-level and only the final pitch of a PA has a non-null `events`."""
+    df = _make_batter_df(
+        [None, None, "single", None, "strikeout"],
+        pitchers=[10] * 5,
+    )
+    out = stats.matchup_stats(df, 10)
+    assert out["pa"] == 2  # two resolved PAs, not five pitches
+    assert out["ab"] == 2
+    assert out["hits"] == 1
+
+
 def test_matchup_stats_raises_for_missing_pitcher() -> None:
     df = _make_batter_df(["single"], [10])
     with pytest.raises(ValueError, match="No matchup rows"):
@@ -121,14 +134,22 @@ def test_parse_exit_velo_filters_by_player() -> None:
             "max_hit_speed": [115.0, 110.0],
             "avg_hit_angle": [12.5, 10.0],
             "brl_percent": [10.0, 5.0],
-            "anglesweetspotpercent": [40.0, 30.0],
-            "brl_pa": [25, 12],
+            "ev95percent": [48.0, 38.0],  # Hard Hit % (EV >= 95 mph)
+            "anglesweetspotpercent": [40.0, 30.0],  # Sweet Spot %, NOT Hard Hit %
+            "brl_pa": [7.5, 3.2],  # barrels per PA — a rate, not a count
+            "barrels": [25, 12],
             "attempts": [400, 300],
         }
     )
     out = stats.parse_exit_velo(df, 1)
     assert "92.5" in out["Avg Exit Velo"]
     assert out["BBE"] == "400"
+    # Regression: Hard Hit % must come from ev95percent (anglesweetspotpercent
+    # is Sweet Spot %), and Barrels from the raw `barrels` count (brl_pa is a
+    # rate per PA).
+    assert out["Hard Hit %"] == "48.0%"
+    assert out["Barrels"] == "25"
+    assert out["Barrel %"] == "10.0%"
 
 
 def test_parse_percentile_ranks_pitcher() -> None:
@@ -172,3 +193,30 @@ def test_aggregate_career_pitcher_ip_weights_rate_stats() -> None:
     assert stats_block["ERA"] == "4.000"
     # Sum of W = 20
     assert stats_block["W"] == "20.0"
+
+
+def test_aggregate_career_sums_pitcher_war() -> None:
+    """Regression: WAR was IP-weight-averaged; it's cumulative and must sum."""
+    f1 = pl.DataFrame({"Name": ["Test Player"], "_year": [2020], "IP": [200.0], "WAR": [6.0]})
+    f2 = pl.DataFrame({"Name": ["Test Player"], "_year": [2021], "IP": [100.0], "WAR": [1.5]})
+    out = stats.aggregate_career([f1, f2], "Test", "Player", [2020, 2021], "pitcher")
+    stats_block = out["stats"]
+    assert isinstance(stats_block, dict)
+    # 6.0 + 1.5 = 7.5 — not the IP-weighted average (4.5)
+    assert stats_block["WAR"] == "7.500"
+
+
+def test_aggregate_career_sums_batter_war_but_weights_rates() -> None:
+    f1 = pl.DataFrame(
+        {"Name": ["Test Player"], "_year": [2020], "PA": [600.0], "WAR": [5.0], "AVG": [0.300]}
+    )
+    f2 = pl.DataFrame(
+        {"Name": ["Test Player"], "_year": [2021], "PA": [200.0], "WAR": [1.0], "AVG": [0.200]}
+    )
+    out = stats.aggregate_career([f1, f2], "Test", "Player", [2020, 2021], "batter")
+    stats_block = out["stats"]
+    assert isinstance(stats_block, dict)
+    # WAR sums: 5 + 1 = 6 — not the PA-weighted average (4.0)
+    assert stats_block["WAR"] == "6.000"
+    # Rate stats stay PA-weighted: (0.3*600 + 0.2*200) / 800 = 0.275
+    assert stats_block["AVG"] == "0.275"

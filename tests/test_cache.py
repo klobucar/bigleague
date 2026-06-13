@@ -116,6 +116,41 @@ def test_normal_keys_still_round_trip_after_containment_check(tmp_path: Path) ->
     assert got.equals(df)
 
 
+def test_get_self_heals_corrupt_parquet(tmp_path: Path) -> None:
+    """Regression: a truncated/corrupt parquet used to make get() raise on
+    every call forever. It must be unlinked and treated as a miss."""
+    c = StatcastCache(tmp_path)
+    c.set("k", pl.DataFrame({"a": [1]}))
+    path = tmp_path / "k.parquet"
+    path.write_bytes(b"truncated garbage, not parquet")
+    assert c.get("k") is None
+    assert not path.exists()  # corrupt file removed — cache self-heals
+    assert c.get("k") is None  # subsequent calls are clean misses
+
+
+def test_set_leaves_no_tmp_file_on_success(tmp_path: Path) -> None:
+    c = StatcastCache(tmp_path)
+    c.set("k", pl.DataFrame({"a": [1]}))
+    assert not list(tmp_path.glob("*.tmp"))
+    assert (tmp_path / "k.parquet").exists()
+
+
+def test_failed_write_does_not_poison_final_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash mid-write must never leave a partial file at the final path."""
+
+    def _boom(self: pl.DataFrame, file, *args: object, **kwargs: object) -> None:
+        Path(file).write_bytes(b"partial")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pl.DataFrame, "write_parquet", _boom)
+    c = StatcastCache(tmp_path)
+    with pytest.raises(OSError, match="disk full"):
+        c.set("k", pl.DataFrame({"a": [1]}))
+    assert not (tmp_path / "k.parquet").exists()
+
+
 def test_cache_works_without_bloom(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """With bouquet absent, the cache still round-trips — just no negative
     shortcut, so every lookup falls through to a real disk check."""

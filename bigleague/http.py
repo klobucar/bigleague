@@ -13,6 +13,7 @@ down than get banned.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 import httpx
@@ -24,27 +25,51 @@ _BROWSER_UA = (
 )
 
 _client: httpx.AsyncClient | None = None
+_client_loop: asyncio.AbstractEventLoop | None = None
 SAVANT_SEMAPHORE = asyncio.Semaphore(5)
 
 _MLB_BASE = "https://statsapi.mlb.com/api/v1"
 
 
 async def get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
+    """Return the shared client, recreating it if its event loop changed.
+
+    A cached client's pooled connections are bound to the loop it was
+    created on; reusing it across `asyncio.run(...)` calls raises
+    `RuntimeError: Event loop is closed` (which the retry helpers don't
+    catch). If the stored loop isn't the current running loop — or the
+    client is closed — discard it and start fresh.
+    """
+    global _client, _client_loop
+    loop = asyncio.get_running_loop()
+    if _client is not None and (_client.is_closed or _client_loop is not loop):
+        old, old_loop = _client, _client_loop
+        _client = None
+        _client_loop = None
+        if not old.is_closed and old_loop is not None and not old_loop.is_closed():
+            # Best-effort close on the loop that owns the connections; if
+            # that loop is gone we just drop the reference.
+            with contextlib.suppress(RuntimeError):
+                asyncio.run_coroutine_threadsafe(old.aclose(), old_loop)
+    if _client is None:
         _client = httpx.AsyncClient(
             timeout=30.0,
             headers={"User-Agent": _BROWSER_UA},
         )
+        _client_loop = loop
     return _client
 
 
 async def close_client() -> None:
     """Close the shared client. Safe to call multiple times."""
-    global _client
+    global _client, _client_loop
     if _client is not None and not _client.is_closed:
-        await _client.aclose()
+        # A client bound to a loop that no longer exists can't be closed
+        # cleanly — suppress and drop the reference.
+        with contextlib.suppress(RuntimeError):
+            await _client.aclose()
     _client = None
+    _client_loop = None
 
 
 async def savant_get(url: str, params: dict[str, Any]) -> httpx.Response:

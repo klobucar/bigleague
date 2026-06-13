@@ -82,7 +82,9 @@ def matchup_stats(df: pl.DataFrame, pitcher_id: int) -> dict[str, int | float]:
     ab = abs_df.height
     h = hits_df.height
     return {
-        "pa": matchup.height,
+        # The frame is pitch-level; only the final pitch of a PA carries a
+        # non-null `events`, so counting rows would count pitches, not PAs.
+        "pa": matchup.filter(pl.col("events").is_not_null()).height,
         "ab": ab,
         "hits": h,
         "strikeouts": strikeouts,
@@ -229,13 +231,17 @@ def parse_exit_velo(df: pl.DataFrame, player_id: int) -> dict[str, str]:
         v = r.get(key)
         return fmt.format(v) if v is not None else "—"
 
+    # Savant statcast-leaderboard column semantics (easy to mislabel):
+    # `ev95percent` is Hard Hit % (EV >= 95 mph); `anglesweetspotpercent`
+    # is Sweet Spot % (LA 8-32°); `brl_pa` is barrels-per-PA (a rate),
+    # while `barrels` is the raw count.
     return {
         "Avg Exit Velo": _f("avg_hit_speed", "{:.1f} mph"),
         "Max Exit Velo": _f("max_hit_speed", "{:.1f} mph"),
         "Avg Launch Angle": _f("avg_hit_angle", "{:.1f}°"),
         "Barrel %": _f("brl_percent", "{:.1f}%"),
-        "Hard Hit %": _f("anglesweetspotpercent", "{:.1f}%"),
-        "Barrels": str(int(r.get("brl_pa") or 0)),
+        "Hard Hit %": _f("ev95percent", "{:.1f}%"),
+        "Barrels": str(int(r.get("barrels") or 0)),
         "BBE": str(int(r.get("attempts") or r.get("pa") or 0)),
     }
 
@@ -362,26 +368,28 @@ def aggregate_career(
     seasons = rows["_year"].n_unique()
     totals: dict[str, str] = {"Seasons": str(seasons)}
 
+    # WAR is a cumulative counting stat — career WAR is the sum of season
+    # WARs, never an IP/PA-weighted average.
     if player_type == "pitcher":
-        for col in ("W", "L", "SV", "G", "GS"):
+        for col in ("W", "L", "SV", "G", "GS", "WAR"):
             if col in rows.columns:
                 totals[col] = _fmt(rows[col].cast(pl.Float64).sum())
         if "IP" in rows.columns:
             ip = rows["IP"].cast(pl.Float64)
             ip_sum = float(ip.sum() or 1.0)
             totals["IP"] = _fmt(ip_sum)
-            for col in ("ERA", "FIP", "WHIP", "K/9", "BB/9", "WAR"):
+            for col in ("ERA", "FIP", "WHIP", "K/9", "BB/9"):
                 if col in rows.columns:
                     weighted_sum = float((rows[col].cast(pl.Float64) * ip).sum() or 0.0)
                     totals[col] = _fmt(weighted_sum / ip_sum)
     else:
-        for col in ("G", "PA", "AB", "H", "HR", "RBI", "SB", "BB"):
+        for col in ("G", "PA", "AB", "H", "HR", "RBI", "SB", "BB", "WAR"):
             if col in rows.columns:
                 totals[col] = _fmt(rows[col].cast(pl.Float64).sum())
         if "PA" in rows.columns:
             pa = rows["PA"].cast(pl.Float64)
             pa_sum = float(pa.sum() or 1.0)
-            for col in ("AVG", "OBP", "SLG", "OPS", "wRC+", "WAR"):
+            for col in ("AVG", "OBP", "SLG", "OPS", "wRC+"):
                 if col in rows.columns:
                     weighted_sum = float((rows[col].cast(pl.Float64) * pa).sum() or 0.0)
                     totals[col] = _fmt(weighted_sum / pa_sum)
