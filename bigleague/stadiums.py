@@ -20,7 +20,7 @@ STADIUM_ALIASES: dict[str, str] = {
 STADIUM_TO_TEAM_CODE: dict[str, str] = {
     "angels": "LAA",
     "astros": "HOU",
-    "athletics": "OAK",
+    "athletics": "ATH",  # Savant's 2025+ code (was OAK; see LEGACY_TEAM_CODES)
     "blue_jays": "TOR",
     "braves": "ATL",
     "brewers": "MIL",
@@ -49,6 +49,13 @@ STADIUM_TO_TEAM_CODE: dict[str, str] = {
     "twins": "MIN",
     "white_sox": "CWS",
     "yankees": "NYY",
+}
+
+# Codes that changed over time: current code -> codes older Statcast frames
+# carry in home_team (OAK→ATH in 2025). Filters that match on a stadium's
+# team code should accept any era's code.
+LEGACY_TEAM_CODES: dict[str, tuple[str, ...]] = {
+    "ATH": ("OAK",),
 }
 
 # Bundled stadium metadata — name, location, and outfield wall distances

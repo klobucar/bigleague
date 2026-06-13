@@ -58,6 +58,14 @@ def test_team_codes_all_resolve_to_known_stadiums() -> None:
         assert stadiums.normalize(stadium_key) in stadiums.known_stadiums()
 
 
+def test_athletics_uses_current_savant_code_with_legacy_alias() -> None:
+    """The library normalizes OAK→ATH (Savant's 2025+ code); the stadium map
+    must agree or athletics filters match zero rows. Pre-2025 frames still
+    carry OAK, kept reachable via LEGACY_TEAM_CODES."""
+    assert stadiums.STADIUM_TO_TEAM_CODE["athletics"] == "ATH"
+    assert stadiums.LEGACY_TEAM_CODES["ATH"] == ("OAK",)
+
+
 def test_metadata_unknown_raises() -> None:
     with pytest.raises(ValueError, match="Unknown stadium"):
         stadiums.metadata("not_a_real_park")

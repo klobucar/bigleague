@@ -110,6 +110,21 @@ def test_hot_zones_grid_returns_keys_1_through_9() -> None:
     assert grid[2] == 0.0
 
 
+def test_hot_zones_ab_counts_matches_grid_zones() -> None:
+    df = pl.DataFrame(
+        {
+            "zone": [1, 1, 5, 9],
+            "events": ["single", "field_out", "ball", "walk"],
+        }
+    )
+    counts = stats.hot_zones_ab_counts(df)
+    assert set(counts.keys()) == set(range(1, 10))
+    assert counts[1] == 2
+    # Pitches without an AB-resolving event don't count as at-bats.
+    assert counts[5] == 0
+    assert counts[9] == 0
+
+
 def test_parse_pitch_arsenal_sorts_by_usage() -> None:
     df = pl.DataFrame(
         {
@@ -193,6 +208,37 @@ def test_aggregate_career_pitcher_ip_weights_rate_stats() -> None:
     assert stats_block["ERA"] == "4.000"
     # Sum of W = 20
     assert stats_block["W"] == "20.0"
+
+
+def test_aggregate_career_zero_ip_reports_zero_not_one() -> None:
+    """Regression: `ip.sum() or 1.0` fabricated 1.0 IP for a 0-IP career."""
+    f1 = pl.DataFrame({"Name": ["Test Player"], "_year": [2020], "IP": [0.0], "ERA": [0.0]})
+    out = stats.aggregate_career([f1], "Test", "Player", [2020], "pitcher")
+    stats_block = out["stats"]
+    assert isinstance(stats_block, dict)
+    assert stats_block["IP"] == "0.000"
+    # Rate stats are undefined over 0 IP — never a fabricated 0.000 ERA.
+    assert stats_block["ERA"] == "—"
+
+
+def test_aggregate_career_sums_ip_in_thirds() -> None:
+    """Display IP uses .1/.2 for 1/3 and 2/3 innings: 200.1 + 100.2 is
+    301.0 innings, not 300.3."""
+    f1 = pl.DataFrame({"Name": ["Test Player"], "_year": [2020], "IP": [200.1], "ERA": [3.00]})
+    f2 = pl.DataFrame({"Name": ["Test Player"], "_year": [2021], "IP": [100.2], "ERA": [6.00]})
+    out = stats.aggregate_career([f1, f2], "Test", "Player", [2020, 2021], "pitcher")
+    stats_block = out["stats"]
+    assert isinstance(stats_block, dict)
+    assert stats_block["IP"] == "301.0"
+    # ERA weights by true innings: (3*200⅓ + 6*100⅔) / 301 ≈ 4.003
+    assert stats_block["ERA"] == "4.003"
+
+
+def test_ip_display_helpers_round_trip() -> None:
+    assert stats._ip_display_to_innings(200.1) == pytest.approx(200 + 1 / 3)
+    assert stats._ip_display_to_innings(100.2) == pytest.approx(100 + 2 / 3)
+    assert stats._innings_to_ip_display(301.0) == 301.0
+    assert stats._innings_to_ip_display(10 + 2 / 3) == 10.2
 
 
 def test_aggregate_career_sums_pitcher_war() -> None:

@@ -255,6 +255,130 @@ async def test_top_leaderboard_sorts_descending(monkeypatch: pytest.MonkeyPatch)
     assert out[0]["rank"] == 1
 
 
+async def test_top_leaderboard_sorts_ascending_for_era(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lower-is-better stats (ERA, FIP, WHIP, ...) must sort ascending —
+    'top 10 ERA' means the best pitchers, not the worst."""
+    pitch_payload = {
+        "data": [
+            {"Name": "B", "Team": "BOS", "ERA": 4.50},
+            {"Name": "A", "Team": "NYY", "ERA": 2.10},
+            {"Name": "C", "Team": "TB", "ERA": 3.20},
+        ]
+    }
+
+    def _get(_url, params, **_kw):
+        return _fake_resp(200, pitch_payload if params["stats"] == "pit" else {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    out = await fangraphs.top_leaderboard("ERA", 2024, n=3, player_type="pitcher")
+    assert [r["name"] for r in out] == ["A", "C", "B"]
+    assert out[0]["value"] == "2.100"
+
+
+# --- career stats (probe + gather) ------------------------------------------
+
+
+def _patch_mlb_years(monkeypatch: pytest.MonkeyPatch, debut: int, last: int) -> None:
+    async def _fake_years(_first: str, _last: str) -> tuple[int, int]:
+        return (debut, last)
+
+    import bigleague.players as players_mod
+
+    monkeypatch.setattr(players_mod, "mlb_years", _fake_years)
+
+
+async def test_career_stats_probes_pitcher_side_then_gathers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pitcher's career must never fetch the batter leaderboard: the first
+    year is probed, then the remaining years fetch only the matched side."""
+    _patch_mlb_years(monkeypatch, 2020, 2022)
+    era = {2020: 3.00, 2021: 6.00, 2022: 4.50}
+    seen: list[dict[str, Any]] = []
+
+    def _get(_url, params, **_kw):
+        seen.append(dict(params))
+        if params["stats"] != "pit":
+            return _fake_resp(200, {"data": []})
+        row = {
+            "Name": "Test Player",
+            "Team": "NYY",
+            "IP": 100.0,
+            "ERA": era[params["season"]],
+            "WAR": 2.0,
+        }
+        return _fake_resp(200, {"data": [row]})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    out = await fangraphs.career_stats("Test", "Player")
+    assert out["type"] == "pitcher"
+    stats_block = out["stats"]
+    assert isinstance(stats_block, dict)
+    assert stats_block["Seasons"] == "3"
+    assert stats_block["IP"] == "300.0"
+    # Equal-IP seasons: ERA averages to (3 + 6 + 4.5) / 3 = 4.5; WAR sums.
+    assert stats_block["ERA"] == "4.500"
+    assert stats_block["WAR"] == "6.000"
+    # Exactly one fetch per career year, all pitcher-side.
+    assert all(p["stats"] == "pit" for p in seen)
+    assert sorted(p["season"] for p in seen) == [2020, 2021, 2022]
+
+
+async def test_career_stats_falls_back_to_batter_side(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_mlb_years(monkeypatch, 2020, 2021)
+    seen: list[dict[str, Any]] = []
+
+    def _get(_url, params, **_kw):
+        seen.append(dict(params))
+        if params["stats"] == "pit":
+            return _fake_resp(200, {"data": []})
+        row = {"Name": "Aaron Judge", "Team": "NYY", "PA": 600.0, "AVG": 0.300, "WAR": 8.0}
+        return _fake_resp(200, {"data": [row]})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    out = await fangraphs.career_stats("Aaron", "Judge")
+    assert out["type"] == "batter"
+    stats_block = out["stats"]
+    assert isinstance(stats_block, dict)
+    assert stats_block["Seasons"] == "2"
+    # Pitcher side hit only for the probe year; the rest go straight to bat.
+    assert [p["stats"] for p in seen].count("pit") == 1
+
+
+async def test_career_stats_blocked_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_mlb_years(monkeypatch, 2020, 2022)
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(403)))
+
+    with pytest.raises(fangraphs.FangraphsBlockedError):
+        await fangraphs.career_stats("Test", "Player")
+
+
+async def test_career_stats_ambiguous_probe_sweeps_remaining_years(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No data in the debut year (probe miss) must not lose the career —
+    the remaining years are swept per side."""
+    _patch_mlb_years(monkeypatch, 2020, 2022)
+
+    def _get(_url, params, **_kw):
+        if params["stats"] == "pit" and params["season"] in (2021, 2022):
+            row = {"Name": "Test Player", "Team": "NYY", "IP": 100.0, "ERA": 3.00, "W": 10}
+            return _fake_resp(200, {"data": [row]})
+        return _fake_resp(200, {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    out = await fangraphs.career_stats("Test", "Player")
+    assert out["type"] == "pitcher"
+    stats_block = out["stats"]
+    assert isinstance(stats_block, dict)
+    assert stats_block["Seasons"] == "2"
+    assert stats_block["W"] == "20.0"
+
+
 # --- playoff odds ----------------------------------------------------------
 
 

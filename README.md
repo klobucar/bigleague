@@ -153,10 +153,23 @@ bl.normalize_stadium("Wizards")    # -> "generic"
 bl.stadium_metadata("yankees")      # -> {"name": "Yankee Stadium", ...}
 ```
 
+## ABS challenge data
+
+`bigleague.abs` wraps Baseball Savant's Automated Ball-Strike challenge
+leaderboards (batter / pitcher / catcher roles plus a team summary feed).
+Public functions: `challenges(year, role)` returns the raw leaderboard
+frame, and `team_summary`, `team_top_challengers`, `player`, and
+`league_leaders` answer the common questions on top of it.
+
+```python
+row = await bl.abs.team_summary("NYY", 2025)
+leaders = await bl.abs.league_leaders(2025, limit=10)
+```
+
 ## Tests
 
 ```bash
-.venv/bin/pytest tests/
+uv run pytest tests/
 ```
 
 `BIGLEAGUE_NO_CACHE=1` is set automatically by `tests/conftest.py`. All
@@ -166,7 +179,7 @@ A VCR layer (`pytest-recording`) is wired up but no cassettes are checked in.
 To record one against a live endpoint:
 
 ```bash
-.venv/bin/pytest tests/test_savant.py --record-mode=once
+uv run pytest tests/test_savant.py --record-mode=once
 ```
 
 Cassettes go under `tests/cassettes/`.
@@ -174,8 +187,8 @@ Cassettes go under `tests/cassettes/`.
 ## Lint + type-check
 
 ```bash
-.venv/bin/ruff check bigleague/ tests/
-.venv/bin/ty check bigleague/ tests/
+uv run ruff check bigleague/ tests/
+uv run ty check bigleague/ tests/
 ```
 
 ## Architecture
@@ -191,6 +204,7 @@ bigleague/
 ├── players.py    # Chadwick Bureau lookup
 ├── mlb.py        # MLB Stats API
 ├── savant.py     # Baseball Savant — pitch chunks + leaderboards
+├── abs.py        # Baseball Savant — ABS challenge leaderboards
 ├── fangraphs.py  # FanGraphs JSON API (curl_cffi)
 └── plots.py      # matplotlib renderers
 ```

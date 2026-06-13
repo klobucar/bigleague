@@ -163,6 +163,37 @@ async def test_standings_returns_six_divisions() -> None:
 
 
 @respx.mock
+async def test_players_prefers_use_name_over_legal_first_name() -> None:
+    """statsapi always populates firstName with the LEGAL name; useName is
+    what the player goes by (Jazz, not Jasrado) and must win when present."""
+    respx.get(f"{_BASE}/sports/1/players").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "people": [
+                    {
+                        "id": 665862,
+                        "firstName": "Jasrado",
+                        "useName": "Jazz",
+                        "lastName": "Chisholm Jr.",
+                        "primaryPosition": {"abbreviation": "3B"},
+                    },
+                    {
+                        "id": 1,
+                        "firstName": "Plain",
+                        "lastName": "Fallback",
+                        "primaryPosition": {"abbreviation": "P"},
+                    },
+                ]
+            },
+        )
+    )
+    out = await mlb.players(2025)
+    assert out[0]["first"] == "Jazz"
+    assert out[1]["first"] == "Plain"  # no useName -> legal first name
+
+
+@respx.mock
 async def test_mlb_get_retries_5xx() -> None:
     route = respx.get(f"{_BASE}/teams/147/roster").mock(
         side_effect=[

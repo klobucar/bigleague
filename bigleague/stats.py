@@ -149,22 +149,40 @@ def hot_cold_pitcher(df: pl.DataFrame) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
+def _zone_ab_hits(df: pl.DataFrame) -> dict[int, tuple[int, int]]:
+    """One group_by pass over zones 1-9: `{zone: (ab_count, hit_count)}`.
+
+    Drops null zones and out-of-zone (10-14) pitches first. Always returns
+    exactly keys 1..9; zones absent from the data get (0, 0).
+    """
+    needed = df.select(["zone", "events"]).drop_nulls("zone")
+    needed = needed.filter(pl.col("zone").is_between(1, 9))
+    agg = needed.group_by("zone").agg(
+        pl.col("events").is_in(AB_EVENTS).sum().alias("ab"),
+        pl.col("events").is_in(HIT_EVENTS).sum().alias("hits"),
+    )
+    result: dict[int, tuple[int, int]] = dict.fromkeys(range(1, 10), (0, 0))
+    for zone, ab, hits in agg.iter_rows():
+        result[int(zone)] = (int(ab), int(hits))
+    return result
+
+
 def hot_zones_grid(df: pl.DataFrame) -> dict[int, float]:
     """Return batting average per Statcast zone for zones 1-9.
 
     Drops null zones and out-of-zone (10-14) pitches before computing.
     Always returns exactly keys 1..9; zones with zero ABs return 0.0.
     """
-    needed = df.select(["zone", "events"]).drop_nulls("zone")
-    needed = needed.filter(pl.col("zone").is_between(1, 9))
+    return {z: (h / ab) if ab > 0 else 0.0 for z, (ab, h) in _zone_ab_hits(df).items()}
 
-    result: dict[int, float] = {}
-    for z in range(1, 10):
-        zone_df = needed.filter(pl.col("zone") == z)
-        ab_count = zone_df.filter(pl.col("events").is_in(AB_EVENTS)).height
-        hit_count = zone_df.filter(pl.col("events").is_in(HIT_EVENTS)).height
-        result[z] = (hit_count / ab_count) if ab_count > 0 else 0.0
-    return result
+
+def hot_zones_ab_counts(df: pl.DataFrame) -> dict[int, int]:
+    """Return at-bat counts per Statcast zone for zones 1-9.
+
+    Companion to `hot_zones_grid`: a zone average of 0.0 is ambiguous
+    (no at-bats vs. hitless at-bats); the AB counts disambiguate.
+    """
+    return {z: ab for z, (ab, _h) in _zone_ab_hits(df).items()}
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +361,24 @@ def parse_expected_stats(df: pl.DataFrame, player_id: int) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def _ip_display_to_innings(ip: float) -> float:
+    """Convert display IP (x.1 = 1/3, x.2 = 2/3 of an inning) to true innings.
+
+    FanGraphs (like every baseball source) renders partial innings as .1/.2,
+    so the decimals must not be summed or weighted as-is: 200.1 + 100.2 is
+    301.0 innings, not 300.3.
+    """
+    whole = int(ip)
+    outs = round((ip - whole) * 10)
+    return whole + outs / 3.0
+
+
+def _innings_to_ip_display(innings: float) -> float:
+    """Convert true innings back to the .1/.2 display convention."""
+    whole, outs = divmod(round(innings * 3), 3)
+    return whole + outs / 10.0
+
+
 def aggregate_career(
     frames: list[pl.DataFrame],
     first: str,
@@ -375,13 +411,22 @@ def aggregate_career(
             if col in rows.columns:
                 totals[col] = _fmt(rows[col].cast(pl.Float64).sum())
         if "IP" in rows.columns:
-            ip = rows["IP"].cast(pl.Float64)
-            ip_sum = float(ip.sum() or 1.0)
-            totals["IP"] = _fmt(ip_sum)
+            # Display IP uses the .1/.2 = 1/3 / 2/3 convention; convert to
+            # true innings before summing/weighting, and back for output.
+            ip = (
+                rows["IP"]
+                .cast(pl.Float64)
+                .map_elements(_ip_display_to_innings, return_dtype=pl.Float64)
+            )
+            ip_sum = float(ip.sum() or 0.0)
+            totals["IP"] = _fmt(_innings_to_ip_display(ip_sum))
             for col in ("ERA", "FIP", "WHIP", "K/9", "BB/9"):
                 if col in rows.columns:
-                    weighted_sum = float((rows[col].cast(pl.Float64) * ip).sum() or 0.0)
-                    totals[col] = _fmt(weighted_sum / ip_sum)
+                    if ip_sum > 0:
+                        weighted_sum = float((rows[col].cast(pl.Float64) * ip).sum() or 0.0)
+                        totals[col] = _fmt(weighted_sum / ip_sum)
+                    else:
+                        totals[col] = _fmt(None)  # rates are undefined at 0 IP
     else:
         for col in ("G", "PA", "AB", "H", "HR", "RBI", "SB", "BB", "WAR"):
             if col in rows.columns:

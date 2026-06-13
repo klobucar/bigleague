@@ -99,7 +99,10 @@ def _team_id(abbrev: str) -> int:
 
 
 async def roster(team: str) -> list[dict[str, str]]:
-    """Active 26-man roster: [{name, pos, status}]."""
+    """Active 26-man roster: [{name, pos, status}].
+
+    Raises ValueError if the API returns no roster rows for the team.
+    """
     tid = _team_id(team)
     data = await mlb_get(f"/teams/{tid}/roster", {"rosterType": "active"})
     rows = data.get("roster", [])
@@ -151,7 +154,10 @@ async def injuries(team: str) -> list[dict[str, str]]:
 
 
 async def transactions(team: str, days: int = 7) -> list[dict[str, str]]:
-    """Recent roster transactions, newest first: [{date, desc}]."""
+    """Recent roster transactions, newest first: [{date, desc}].
+
+    Raises ValueError if the team has no transactions in the window.
+    """
     tid = _team_id(team)
     today = date.today()
     start = today - timedelta(days=days)
@@ -181,7 +187,10 @@ async def transactions(team: str, days: int = 7) -> list[dict[str, str]]:
 
 
 async def live_scores(team: str) -> list[dict[str, Any]]:
-    """Today's games for a team with linescore details."""
+    """Today's games for a team with linescore details.
+
+    Raises ValueError if the team has no game today (e.g. an off day).
+    """
     tid = _team_id(team)
     today = date.today().strftime("%Y-%m-%d")
     data = await mlb_get(
@@ -223,7 +232,11 @@ async def live_scores(team: str) -> list[dict[str, Any]]:
 
 
 async def next_game(team: str) -> dict[str, str]:
-    """Next scheduled game with probable pitchers within 14 days."""
+    """Next scheduled game with probable pitchers within 14 days.
+
+    Raises ValueError if no game is scheduled in the next 14 days
+    (e.g. the offseason).
+    """
     tid = _team_id(team)
     today = date.today()
     end = today + timedelta(days=14)
@@ -328,7 +341,10 @@ async def players(season: int) -> list[dict[str, Any]]:
         out.append(
             {
                 "id": p.get("id"),
-                "first": (p.get("firstName") or p.get("useName") or "").strip(),
+                # useName is the name the player actually goes by ("Jazz");
+                # firstName is the legal name ("Jasrado") and is always
+                # populated, so it must be the fallback, not the preference.
+                "first": (p.get("useName") or p.get("firstName") or "").strip(),
                 "last": (p.get("lastName") or "").strip(),
                 "team": team_abbr,
                 "position": (p.get("primaryPosition") or {}).get("abbreviation", ""),
@@ -349,7 +365,10 @@ async def players_multi_season(seasons: list[int]) -> list[dict[str, Any]]:
 
 
 async def standings(year: int) -> list[dict[str, Any]]:
-    """MLB division standings: list of {division, teams: [{name, w, l, gb, pct}]}."""
+    """MLB division standings: list of {division, teams: [{name, w, l, gb, pct}]}.
+
+    Raises ValueError if the API has no standings records for the year.
+    """
     data = await mlb_get(
         "/standings",
         {

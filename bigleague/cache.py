@@ -3,9 +3,10 @@
 With the `bloom` extra installed, a bouquet filter answers "have I ever
 cached this key?" in O(1): on a definite miss we skip the
 `Path.exists()` call entirely; on a hit (or false positive) we fall
-through to the disk check. Filenames seed the bloom on init — we never
-read parquet contents during seeding, which would make the first call
-to a warm-cache process unnecessarily slow.
+through to the disk check. Filenames seed the bloom lazily on first
+real use (never at import) — we never read parquet contents during
+seeding, which would make the first call to a warm-cache process
+unnecessarily slow.
 
 Without the extra, every `get()` does a `Path.exists()` syscall — fine
 for small caches, just no negative-lookup shortcut. Install with
@@ -43,18 +44,17 @@ def resolve_cache_dir() -> Path:
 
 
 class StatcastCache:
+    """All filesystem work is lazy: __init__ touches nothing on disk, so
+    importing the module (which constructs the global `cache`) is side-effect
+    free, and `BIGLEAGUE_NO_CACHE` is honored per-call rather than being
+    frozen at construction time."""
+
     def __init__(self, cache_dir: Path | None = None) -> None:
         self.cache_dir = cache_dir or resolve_cache_dir()
         self.bloom: ClassicalFilter | None = (
             ClassicalFilter.from_false_pos(0.01, 10_000) if ClassicalFilter else None
         )
-        # Skip filesystem setup entirely when caching is disabled — the
-        # default cache_dir may not be writable in some environments.
-        if os.environ.get("BIGLEAGUE_NO_CACHE"):
-            return
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        if self.bloom is not None:
-            self._seed_bloom()
+        self._bloom_seeded = False
 
     def _key_path(self, key: str) -> Path:
         """Resolve a cache key to its parquet path, refusing escapes.
@@ -69,16 +69,20 @@ class StatcastCache:
             raise ValueError(msg)
         return path
 
-    def _seed_bloom(self) -> None:
-        """Populate the bloom from filenames on disk. No parquet reads."""
-        assert self.bloom is not None
+    def _ensure_bloom_seeded(self) -> None:
+        """Populate the bloom from filenames on disk, once, on first real
+        use. No parquet reads — contents never matter for membership."""
+        if self.bloom is None or self._bloom_seeded:
+            return
         for f in self.cache_dir.glob("*.parquet"):
             self.bloom.insert(f.stem)
+        self._bloom_seeded = True
 
     def get(self, key: str) -> pl.DataFrame | None:
         if os.environ.get("BIGLEAGUE_NO_CACHE"):
             return None
         path = self._key_path(key)
+        self._ensure_bloom_seeded()
         if self.bloom is not None and key not in self.bloom:
             return None
         if not path.exists():
@@ -96,6 +100,11 @@ class StatcastCache:
         if os.environ.get("BIGLEAGUE_NO_CACHE"):
             return
         path = self._key_path(key)
+        # mkdir-on-demand: the dir is created at write time, not import time,
+        # so NO_CACHE flipping between import and first write can't strand
+        # writes in a never-created directory.
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_bloom_seeded()
         # Write to a temp file in the same directory, then atomically rename
         # over the final path, so a crash mid-write can never leave a
         # truncated parquet that poisons every later get(). The temp path is
