@@ -271,3 +271,24 @@ async def test_semaphore_caps_concurrency(monkeypatch: pytest.MonkeyPatch) -> No
     # Request 60 days = 9 chunks > the 5-permit limit.
     await savant.statcast(date(2024, 4, 1), date(2024, 5, 30))
     assert high_water <= 5
+
+
+def test_get_client_returns_fresh_client_per_event_loop() -> None:
+    """Regression: a client cached across `asyncio.run(...)` calls keeps
+    pooled connections bound to the first (closed) loop, so the next call
+    dies with 'RuntimeError: Event loop is closed'."""
+    import asyncio
+
+    from bigleague import http as http_mod
+
+    c1 = asyncio.run(http_mod.get_client())
+    c2 = asyncio.run(http_mod.get_client())
+    assert c2 is not c1
+
+    async def _same_loop_reuses() -> bool:
+        a = await http_mod.get_client()
+        b = await http_mod.get_client()
+        return a is b
+
+    assert asyncio.run(_same_loop_reuses())
+    asyncio.run(http_mod.close_client())
