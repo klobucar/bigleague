@@ -329,6 +329,16 @@ def _draw_field(
 # ---------------------------------------------------------------------------
 
 
+# Savant hc_x/hc_y come in a ~0-250 pixel grid with home plate at
+# (125.42, 198.27); the field is drawn in feet, so scale by ~2.495 ft/px.
+_SAVANT_PX_TO_FT = 2.495
+
+
+def _savant_to_feet(hc_x: float, hc_y: float) -> tuple[float, float]:
+    """Convert Savant pixel-grid hit coordinates to feet from home plate."""
+    return (hc_x - 125.42) * _SAVANT_PX_TO_FT, (198.27 - hc_y) * _SAVANT_PX_TO_FT
+
+
 def _hit_color(event: str | None) -> str:
     if event == "home_run":
         return "gold"
@@ -365,8 +375,7 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
         _draw_field(ax, lf, cf, rf)
 
         for row in data.iter_rows(named=True):
-            field_x = float(row["hc_x"]) - 125.42
-            field_y = 198.27 - float(row["hc_y"])
+            field_x, field_y = _savant_to_feet(float(row["hc_x"]), float(row["hc_y"]))
             color = _hit_color(row.get("events"))
             ax.scatter(
                 field_x,

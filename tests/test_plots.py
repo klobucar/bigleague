@@ -56,6 +56,20 @@ def test_hot_zones_returns_png_and_calls_grid() -> None:
     m.assert_called_once_with(df)
 
 
+def test_savant_to_feet_scales_pixel_grid() -> None:
+    """Regression: coordinates were translated but never scaled to feet."""
+    # Home plate maps to the origin.
+    assert plots._savant_to_feet(125.42, 198.27) == (0.0, 0.0)
+    # A known point: 100 px straight up from home plate is ~249.5 ft to CF.
+    x, y = plots._savant_to_feet(125.42, 98.27)
+    assert x == pytest.approx(0.0)
+    assert y == pytest.approx(249.5)
+    # And a pulled ball lands left of center, scaled by the same factor.
+    x, y = plots._savant_to_feet(100.0, 100.0)
+    assert x == pytest.approx((100.0 - 125.42) * 2.495)
+    assert y == pytest.approx((198.27 - 100.0) * 2.495)
+
+
 def test_spray_chart_filters_to_in_play() -> None:
     out = plots.spray_chart(_spray_df(), "Test", stadium_key="yankees")
     assert out.startswith(_PNG_MAGIC)
