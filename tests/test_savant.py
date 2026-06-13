@@ -109,6 +109,35 @@ async def test_statcast_normalizes_team_filter(given: str, expected: str) -> Non
     assert route.calls[0].request.url.params["team"] == expected
 
 
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("oak", "ATH"),  # alias map applies after case-folding
+        ("NYY", "NYY"),  # unknown-to-the-map codes pass through unchanged
+        (" tb ", "TB"),  # whitespace stripped
+    ],
+)
+def test_normalize_team_accepts_plausible_codes(given: str, expected: str) -> None:
+    assert savant.normalize_team(given) == expected
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../../tmp/pwn",  # path traversal — became a cache filename verbatim
+        "a/b",
+        "",
+        "TOOLONGCODE",
+        "NY1",
+    ],
+)
+def test_normalize_team_rejects_non_team_shaped_input(bad: str) -> None:
+    """Anything that isn't 2-5 uppercase letters after normalization must
+    raise: the result feeds the parquet cache filename."""
+    with pytest.raises(ValueError, match="invalid team abbreviation"):
+        savant.normalize_team(bad)
+
+
 @respx.mock
 async def test_statcast_batter_includes_player_params() -> None:
     route = respx.get(_CSV_URL).mock(return_value=httpx.Response(200, content=_fake_csv_body()))

@@ -12,6 +12,7 @@ Leaderboard endpoints are JSON-ish CSV one-shots; no chunking, no cache.
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import date, timedelta
 from io import BytesIO
 from typing import Literal
@@ -44,10 +45,26 @@ _TEAM_TO_SAVANT: dict[str, str] = {
 }
 
 
+# Shape of a plausible team code. Deliberately NOT a closed allowlist of
+# current teams (codes get added/renamed — OAK→ATH), but tight enough that
+# the result is safe to embed in a cache filename: unknown values used to
+# pass through verbatim, so team="../../tmp/pwn" became a path that escaped
+# the cache dir.
+_TEAM_CODE_RE = re.compile(r"[A-Z]{2,5}")
+
+
 def normalize_team(abbr: str) -> str:
-    """Normalize a user-typed team abbreviation to the form Savant uses."""
+    """Normalize a user-typed team abbreviation to the form Savant uses.
+
+    Raises ValueError if the result doesn't look like a team code
+    (2-5 ASCII uppercase letters).
+    """
     up = abbr.strip().upper()
-    return _TEAM_TO_SAVANT.get(up, up)
+    code = _TEAM_TO_SAVANT.get(up, up)
+    if not _TEAM_CODE_RE.fullmatch(code):
+        msg = f"invalid team abbreviation: {abbr!r} (expected 2-5 letters, e.g. 'NYY')"
+        raise ValueError(msg)
+    return code
 
 
 # ---------------------------------------------------------------------------

@@ -56,6 +56,19 @@ class StatcastCache:
         if self.bloom is not None:
             self._seed_bloom()
 
+    def _key_path(self, key: str) -> Path:
+        """Resolve a cache key to its parquet path, refusing escapes.
+
+        Keys come from upstream-validated inputs, but defense in depth:
+        a key containing path separators (or `..`) must never resolve
+        outside cache_dir.
+        """
+        path = self.cache_dir / f"{key}.parquet"
+        if not path.resolve().is_relative_to(self.cache_dir.resolve()):
+            msg = f"cache key escapes cache dir: {key!r}"
+            raise ValueError(msg)
+        return path
+
     def _seed_bloom(self) -> None:
         """Populate the bloom from filenames on disk. No parquet reads."""
         assert self.bloom is not None
@@ -65,9 +78,9 @@ class StatcastCache:
     def get(self, key: str) -> pl.DataFrame | None:
         if os.environ.get("BIGLEAGUE_NO_CACHE"):
             return None
+        path = self._key_path(key)
         if self.bloom is not None and key not in self.bloom:
             return None
-        path = self.cache_dir / f"{key}.parquet"
         if not path.exists():
             return None
         return pl.read_parquet(path)
@@ -75,7 +88,7 @@ class StatcastCache:
     def set(self, key: str, df: pl.DataFrame) -> None:
         if os.environ.get("BIGLEAGUE_NO_CACHE"):
             return
-        path = self.cache_dir / f"{key}.parquet"
+        path = self._key_path(key)
         df.write_parquet(path)
         if self.bloom is not None:
             self.bloom.insert(key)

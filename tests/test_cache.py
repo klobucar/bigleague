@@ -94,6 +94,28 @@ def test_false_positive_falls_through_to_disk_miss(tmp_path: Path) -> None:
     assert c.get("ghost") is None
 
 
+def test_set_rejects_key_escaping_cache_dir(tmp_path: Path) -> None:
+    c = StatcastCache(tmp_path)
+    with pytest.raises(ValueError, match="escapes cache dir"):
+        c.set("../escape", pl.DataFrame({"x": [1]}))
+    assert not (tmp_path.parent / "escape.parquet").exists()
+
+
+def test_get_rejects_key_escaping_cache_dir(tmp_path: Path) -> None:
+    c = StatcastCache(tmp_path)
+    with pytest.raises(ValueError, match="escapes cache dir"):
+        c.get("../../etc/secret")
+
+
+def test_normal_keys_still_round_trip_after_containment_check(tmp_path: Path) -> None:
+    c = StatcastCache(tmp_path)
+    df = pl.DataFrame({"a": [1]})
+    c.set("statcast_NYY_2024-04-01_2024-04-07", df)
+    got = c.get("statcast_NYY_2024-04-01_2024-04-07")
+    assert got is not None
+    assert got.equals(df)
+
+
 def test_cache_works_without_bloom(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """With bouquet absent, the cache still round-trips — just no negative
     shortcut, so every lookup falls through to a real disk check."""
