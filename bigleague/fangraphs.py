@@ -188,8 +188,10 @@ def _fetch_leaderboard_range_sync(
         "stats": kind,
         "lg": "all",
         "qual": 0,
-        "season": start.year,
-        "season1": end.year,
+        # `season1` is the START year and `season` is the END year (same
+        # semantics as _fetch_leaderboard_sync) even in date-range mode.
+        "season": end.year,
+        "season1": start.year,
         "ind": 0,
         "team": 0,
         "month": 1000,
@@ -214,8 +216,9 @@ def _fetch_fielding_sync(
         "stats": "fld",
         "lg": "all",
         "qual": qual,
-        "season": start_season,
-        "season1": end_season,
+        # `season1` = START year, `season` = END year (FanGraphs semantics).
+        "season": end_season,
+        "season1": start_season,
         "ind": 0,
         "team": 0,
         "month": 0,
@@ -239,8 +242,9 @@ def _fetch_team_sync(
         "stats": kind,
         "lg": "all",
         "qual": 0,
-        "season": start_season,
-        "season1": end_season,
+        # `season1` = START year, `season` = END year (FanGraphs semantics).
+        "season": end_season,
+        "season1": start_season,
         "ind": 0,
         "team": "0,ts",  # 'ts' = team summary
         "month": 0,

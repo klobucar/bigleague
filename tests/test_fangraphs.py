@@ -126,6 +126,59 @@ async def test_pitching_stats_sends_start_and_end_season(monkeypatch: pytest.Mon
     assert seen[0]["season"] == 2023
 
 
+async def test_fielding_stats_sends_start_and_end_season(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: fielding sent season=start, season1=end — inverted.
+    FanGraphs semantics: season1 = start year, season = end year."""
+    seen: list[dict[str, Any]] = []
+
+    def _get(_url, params, **_kw):
+        seen.append(params)
+        return _fake_resp(200, {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    await fangraphs.fielding_stats(2021, 2023)
+    assert seen[0]["season1"] == 2021
+    assert seen[0]["season"] == 2023
+
+
+@pytest.mark.parametrize("fn_name", ["team_batting", "team_pitching"])
+async def test_team_stats_send_start_and_end_season(
+    monkeypatch: pytest.MonkeyPatch, fn_name: str
+) -> None:
+    """Regression: team endpoints sent season=start, season1=end — inverted."""
+    seen: list[dict[str, Any]] = []
+
+    def _get(_url, params, **_kw):
+        seen.append(params)
+        return _fake_resp(200, {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    await getattr(fangraphs, fn_name)(2021, 2023)
+    assert seen[0]["season1"] == 2021
+    assert seen[0]["season"] == 2023
+
+
+async def test_stats_range_sends_start_and_end_year(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: date-range mode also had season/season1 inverted."""
+    from datetime import date
+
+    seen: list[dict[str, Any]] = []
+
+    def _get(_url, params, **_kw):
+        seen.append(params)
+        return _fake_resp(200, {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    await fangraphs.batting_stats_range(date(2021, 4, 1), date(2023, 9, 1))
+    assert seen[0]["season1"] == 2021
+    assert seen[0]["season"] == 2023
+    assert seen[0]["startdate"] == "2021-04-01"
+    assert seen[0]["enddate"] == "2023-09-01"
+
+
 async def test_leaderboard_single_year_sends_equal_seasons(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
