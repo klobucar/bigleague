@@ -26,7 +26,15 @@ from bigleague.http import get_client
 #
 # Hit raw.githubusercontent.com directly: the github.com/.../raw/... path 302s
 # here, and our shared httpx client doesn't follow redirects.
-_REGISTER_BASE = "https://raw.githubusercontent.com/chadwickbureau/register/master/data"
+#
+# Pin to a specific commit rather than `master` for supply-chain integrity:
+# a git commit SHA is content-addressed, so the bytes we fetch can't change
+# under us (or be swapped by a compromised branch). Bump deliberately to pick
+# up newly registered players.
+_REGISTER_COMMIT = "6e9db4bfeed5de99cb338a248c00030f53e98344"  # 2026-06-01
+_REGISTER_BASE = (
+    f"https://raw.githubusercontent.com/chadwickbureau/register/{_REGISTER_COMMIT}/data"
+)
 _REGISTER_SHARDS = tuple(f"people-{c}.csv" for c in "0123456789abcdef")
 _REGISTER_FILENAME = "chadwick_people.parquet"
 
