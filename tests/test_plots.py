@@ -56,6 +56,24 @@ def test_hot_zones_returns_png_and_calls_grid() -> None:
     m.assert_called_once_with(df)
 
 
+def test_hot_zones_cold_slump_renders_but_truly_empty_raises() -> None:
+    # 0-for-everything: every zone average is 0.0 but the at-bats are real —
+    # this is a cold slump, not missing data, and must render.
+    cold = pl.DataFrame(
+        {
+            "zone": [1, 5, 9],
+            "events": ["field_out", "strikeout", "field_out"],
+        }
+    )
+    out = plots.hot_zones(cold, "Cold")
+    assert out.startswith(_PNG_MAGIC)
+
+    # No AB-resolving events at all -> genuinely nothing to chart.
+    empty = pl.DataFrame({"zone": [1, 5], "events": ["ball", "foul"]})
+    with pytest.raises(ValueError, match="No at-bats"):
+        plots.hot_zones(empty, "Empty")
+
+
 def test_savant_to_feet_scales_pixel_grid() -> None:
     """Regression: coordinates were translated but never scaled to feet."""
     # Home plate maps to the origin.
@@ -72,6 +90,23 @@ def test_savant_to_feet_scales_pixel_grid() -> None:
 
 def test_spray_chart_filters_to_in_play() -> None:
     out = plots.spray_chart(_spray_df(), "Test", stadium_key="yankees")
+    assert out.startswith(_PNG_MAGIC)
+
+
+@pytest.mark.parametrize("home_code", ["ATH", "OAK"])
+def test_spray_chart_athletics_matches_both_era_codes(home_code: str) -> None:
+    """Savant uses ATH from 2025 on; older frames carry OAK. The athletics
+    park filter must keep rows from either era."""
+    df = pl.DataFrame(
+        {
+            "type": ["X", "X"],
+            "hc_x": [100.0, 150.0],
+            "hc_y": [80.0, 100.0],
+            "events": ["single", "home_run"],
+            "home_team": [home_code, home_code],
+        }
+    )
+    out = plots.spray_chart(df, "Test", stadium_key="athletics")
     assert out.startswith(_PNG_MAGIC)
 
 

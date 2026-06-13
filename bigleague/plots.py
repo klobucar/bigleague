@@ -31,8 +31,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 
-from bigleague.stadiums import STADIUM_DATA, STADIUM_TO_TEAM_CODE
-from bigleague.stats import hot_zones_grid
+from bigleague.stadiums import LEGACY_TEAM_CODES, STADIUM_DATA, STADIUM_TO_TEAM_CODE
+from bigleague.stats import hot_zones_ab_counts, hot_zones_grid
 
 _PITCH_COLORS: dict[str, str] = {
     "FF": "red",
@@ -107,17 +107,19 @@ def _zone_scatter(df: pl.DataFrame, title: str, colorby: str) -> bytes:
 
     fig, ax = plt.subplots(figsize=(8, 8))
     try:
-        seen: set[str] = set()
-        for row in needed.iter_rows(named=True):
-            key = str(row.get(colorby) or "")
-            color = _PITCH_COLORS.get(key, _DEFAULT_PITCH_COLOR)
-            label = key if key not in seen else None
-            seen.add(key)
+        # One scatter artist per color group, not per pitch — league-wide
+        # frames would otherwise create tens of thousands of artists.
+        if colorby in needed.columns:
+            groups = list(needed.group_by(colorby, maintain_order=True))
+        else:
+            groups = [((None,), needed)]
+        for (key,), group in groups:
+            key_str = str(key or "")
             ax.scatter(
-                row["plate_x"],
-                row["plate_z"],
-                c=color,
-                label=label,
+                group["plate_x"].to_numpy(),
+                group["plate_z"].to_numpy(),
+                c=_PITCH_COLORS.get(key_str, _DEFAULT_PITCH_COLOR),
+                label=key_str,
                 alpha=0.6,
                 s=40,
                 edgecolors="black",
@@ -171,7 +173,9 @@ def hot_zones(df: pl.DataFrame, title: str) -> bytes:
     Catcher's-POV layout: zones 1-3 top, 4-6 middle, 7-9 bottom.
     """
     grid_dict = hot_zones_grid(df)
-    if not any(grid_dict.values()):
+    # Check AB counts, not the averages: an 0-for-everything cold slump has
+    # all-zero averages but real at-bats and should still render.
+    if not any(hot_zones_ab_counts(df).values()):
         raise ValueError("No at-bats recorded in the strike zone for this dataset.")
 
     grid = np.array(
@@ -269,8 +273,6 @@ def _draw_field(
     ax.add_patch(field_patch)
 
     # Warning track: shrink arc by ~15ft toward home
-    track_radii_scale = (arc - 0.0) * (1 - 15.0 / np.linalg.norm(arc, axis=1, keepdims=True))
-    track_inner = arc - (arc - track_radii_scale)
     track_inner = arc * (1 - 15.0 / np.linalg.norm(arc, axis=1, keepdims=True))
     track_poly = np.vstack([arc, track_inner[::-1]])
     track_patch = mpatches.Polygon(
@@ -334,17 +336,27 @@ def _draw_field(
 _SAVANT_PX_TO_FT = 2.495
 
 
-def _savant_to_feet(hc_x: float, hc_y: float) -> tuple[float, float]:
-    """Convert Savant pixel-grid hit coordinates to feet from home plate."""
+def _savant_to_feet(
+    hc_x: float | np.ndarray, hc_y: float | np.ndarray
+) -> tuple[float | np.ndarray, float | np.ndarray]:
+    """Convert Savant pixel-grid hit coordinates to feet from home plate.
+
+    Pure arithmetic, so it works elementwise on numpy arrays as well as
+    scalars.
+    """
     return (hc_x - 125.42) * _SAVANT_PX_TO_FT, (198.27 - hc_y) * _SAVANT_PX_TO_FT
 
 
-def _hit_color(event: str | None) -> str:
-    if event == "home_run":
-        return "gold"
-    if event in ("single", "double", "triple"):
-        return "green"
-    return "lightcoral"
+def _hit_color_expr() -> pl.Expr:
+    """Marker color per batted-ball outcome: HR gold, other hits green,
+    everything else (outs / unknown) lightcoral."""
+    return (
+        pl.when(pl.col("events") == "home_run")
+        .then(pl.lit("gold"))
+        .when(pl.col("events").is_in(["single", "double", "triple"]))
+        .then(pl.lit("green"))
+        .otherwise(pl.lit("lightcoral"))
+    )
 
 
 def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> bytes:
@@ -362,7 +374,10 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
 
     team_code = STADIUM_TO_TEAM_CODE.get(stadium_key)
     if team_code and "home_team" in data.columns:
-        filtered = data.filter(pl.col("home_team") == team_code)
+        # Accept any era's code for the park: pre-2025 frames carry OAK
+        # where current ones carry ATH.
+        codes = [team_code, *LEGACY_TEAM_CODES.get(team_code, ())]
+        filtered = data.filter(pl.col("home_team").is_in(codes))
         if filtered.is_empty():
             raise ValueError(f"No batted-ball data at {stadium_key} park (team_code={team_code}).")
         data = filtered
@@ -370,17 +385,24 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
     meta = STADIUM_DATA.get(stadium_key, STADIUM_DATA["generic"])
     lf, cf, rf = float(meta["lf"]), float(meta["cf"]), float(meta["rf"])
 
+    color_expr = _hit_color_expr() if "events" in data.columns else pl.lit("lightcoral")
+    data = data.with_columns(color_expr.alias("_color"))
+
     fig, ax = plt.subplots(figsize=(8, 8))
     try:
         _draw_field(ax, lf, cf, rf)
 
-        for row in data.iter_rows(named=True):
-            field_x, field_y = _savant_to_feet(float(row["hc_x"]), float(row["hc_y"]))
-            color = _hit_color(row.get("events"))
+        # One scatter artist per color bucket, not per batted ball —
+        # league-wide frames would otherwise create one artist per pitch.
+        for (color,), group in data.group_by("_color", maintain_order=True):
+            field_x, field_y = _savant_to_feet(
+                group["hc_x"].cast(pl.Float64).to_numpy(),
+                group["hc_y"].cast(pl.Float64).to_numpy(),
+            )
             ax.scatter(
                 field_x,
                 field_y,
-                c=color,
+                c=str(color),
                 s=30,
                 alpha=0.7,
                 edgecolors="black",
