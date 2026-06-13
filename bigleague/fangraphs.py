@@ -147,20 +147,23 @@ def _fg_get(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fetch_leaderboard_sync(
-    year: int,
+    start_season: int,
+    end_season: int,
     kind: Literal["bat", "pit"],
     qual: int | str = 1,
 ) -> pl.DataFrame:
     if kind not in ("bat", "pit"):
         raise ValueError(f"kind must be 'bat' or 'pit', got {kind!r}")
+    # FanGraphs leaders API: `season1` is the START year and `season` is the
+    # END year; season=A&season1=B returns the multi-year leaderboard.
     params = {
         "age": "",
         "pos": "all",
         "stats": kind,
         "lg": "all",
         "qual": qual,
-        "season": year,
-        "season1": year,
+        "season": end_season,
+        "season1": start_season,
         "ind": 0,
         "team": 0,
         "month": 0,
@@ -259,18 +262,15 @@ async def leaderboard(
     kind: Literal["bat", "pit"],
     qual: int | str = 1,
 ) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_leaderboard_sync, year, kind, qual)
+    return await asyncio.to_thread(_fetch_leaderboard_sync, year, year, kind, qual)
 
 
 async def batting_stats(start_season: int, end_season: int, qual: int | str = 1) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_leaderboard_sync, start_season, "bat", qual)
-    # NOTE: harry-bot's pybaseball variant aggregated multi-season; the JSON
-    # endpoint with season=A&season1=B returns the multi-year leaderboard.
-    # If we need true multi-season aggregation we revisit here.
+    return await asyncio.to_thread(_fetch_leaderboard_sync, start_season, end_season, "bat", qual)
 
 
 async def pitching_stats(start_season: int, end_season: int, qual: int | str = 1) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_leaderboard_sync, start_season, "pit", qual)
+    return await asyncio.to_thread(_fetch_leaderboard_sync, start_season, end_season, "pit", qual)
 
 
 async def batting_stats_range(start: date, end: date) -> pl.DataFrame:

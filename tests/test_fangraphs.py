@@ -96,6 +96,52 @@ async def test_leaderboard_mixed_int_then_float_builds_float64(
     assert df.filter(pl.col("Name") == "Late")["WAR"][0] == 0.000838
 
 
+async def test_batting_stats_sends_start_and_end_season(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: end_season was dropped — season/season1 both got start_season.
+    FanGraphs semantics: season1 = start year, season = end year."""
+    seen: list[dict[str, Any]] = []
+
+    def _get(_url, params, **_kw):
+        seen.append(params)
+        return _fake_resp(200, {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    await fangraphs.batting_stats(2021, 2023)
+    assert seen[0]["season1"] == 2021
+    assert seen[0]["season"] == 2023
+
+
+async def test_pitching_stats_sends_start_and_end_season(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def _get(_url, params, **_kw):
+        seen.append(params)
+        return _fake_resp(200, {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    await fangraphs.pitching_stats(2021, 2023)
+    assert seen[0]["season1"] == 2021
+    assert seen[0]["season"] == 2023
+
+
+async def test_leaderboard_single_year_sends_equal_seasons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def _get(_url, params, **_kw):
+        seen.append(params)
+        return _fake_resp(200, {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+
+    await fangraphs.leaderboard(2024, "bat")
+    assert seen[0]["season"] == 2024
+    assert seen[0]["season1"] == 2024
+
+
 async def test_player_stats_auto_detects_pitcher(monkeypatch: pytest.MonkeyPatch) -> None:
     pitch_payload = {"data": [{"Name": "Gerrit Cole", "Team": "NYY", "ERA": 3.5, "WAR": 5.0}]}
     bat_payload = {"data": []}
