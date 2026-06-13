@@ -60,10 +60,22 @@ def test_chunks_handles_short_range() -> None:
     assert chunks == [(date(2024, 4, 1), date(2024, 4, 3))]
 
 
-def test_player_chunks_fully_historical_is_one_chunk() -> None:
+def test_player_chunks_single_historical_season_is_one_chunk() -> None:
     # 2020 is well in the past for any conceivable test run date.
     chunks = savant._player_chunks(date(2020, 4, 1), date(2020, 9, 30))
     assert chunks == [(date(2020, 4, 1), date(2020, 9, 30))]
+
+
+def test_player_chunks_splits_multi_year_history_at_year_boundaries() -> None:
+    """Regression: a multi-season span used to go out as ONE request, which
+    Savant silently truncates at ~25k rows — and the truncated frame then got
+    cached. Calendar-year chunks stay well under the cap and cache stably."""
+    chunks = savant._player_chunks(date(2019, 6, 15), date(2021, 8, 1))
+    assert chunks == [
+        (date(2019, 6, 15), date(2019, 12, 31)),
+        (date(2020, 1, 1), date(2020, 12, 31)),
+        (date(2021, 1, 1), date(2021, 8, 1)),
+    ]
 
 
 def test_player_chunks_fully_future_is_one_chunk() -> None:
@@ -78,7 +90,21 @@ def test_player_chunks_splits_across_today() -> None:
     start = today - timedelta(days=30)
     end = today + timedelta(days=2)
     chunks = savant._player_chunks(start, end)
-    assert chunks == [(start, today - timedelta(days=1)), (today, end)]
+    # The today-onward portion is always its own chunk (stays uncached)...
+    assert chunks[-1] == (today, end)
+    # ...and the historical portion covers [start, yesterday].
+    assert chunks[0][0] == start
+    assert chunks[-2][1] == today - timedelta(days=1)
+
+
+def test_cache_key_contains_schema_fingerprint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Parquet cached under an old StatcastPitch schema must never mix with
+    freshly fetched frames; the fingerprint retires old keys on schema change."""
+    start, end = date(2024, 4, 1), date(2024, 4, 7)
+    key = savant._cache_key("statcast", "all", start, end)
+    assert key.endswith(f"_{savant._SCHEMA_FINGERPRINT}")
+    monkeypatch.setattr(savant, "_SCHEMA_FINGERPRINT", "0" * 8)
+    assert savant._cache_key("statcast", "all", start, end) != key
 
 
 @respx.mock
