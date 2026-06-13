@@ -36,6 +36,13 @@ _BATTING_KEYS: list[str] = [
     "AVG", "OBP", "SLG", "OPS", "wOBA", "wRC+", "HR", "RBI", "SB", "WAR", "PA",
 ]  # fmt: skip
 
+# Stats where a smaller value is better — `top_leaderboard` must sort these
+# ascending or "top 10 ERA" returns the worst pitchers. Lowercased for
+# case-insensitive matching against user-typed stat names.
+_LOWER_IS_BETTER_STATS: frozenset[str] = frozenset(
+    {"era", "fip", "xfip", "whip", "xera", "siera", "bb/9", "hr/9"}
+)
+
 _FG_API_URL = "https://www.fangraphs.com/api/leaders/major-league/data"
 _FG_ODDS_URL = "https://www.fangraphs.com/standings/playoff-odds/fg/div"
 _FG_HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -360,29 +367,50 @@ async def player_stats(first: str, last: str, year: int) -> dict[str, Any]:
     raise ValueError(f"No FanGraphs stats found for {first} {last} in {year}.")
 
 
+async def _career_frames_for_side(
+    first: str,
+    last: str,
+    years: list[int],
+    side: Literal["pitcher", "batter"],
+) -> list[pl.DataFrame]:
+    """Fetch one side's frames for all `years` concurrently, dropping misses."""
+    frames = await asyncio.gather(*(player_stats_for_year(first, last, yr, side) for yr in years))
+    return [f for f in frames if f is not None]
+
+
 async def career_stats(first: str, last: str) -> dict[str, Any]:
     """Aggregate a player's career across all years they appear in the
     register's mlb_played_first..last range.
 
-    Tries pitcher-side first; falls back to batter-side.
+    Probes the debut year to learn whether the player lives on the pitcher
+    or batter leaderboard (pitcher-side preferred, matching `player_stats`),
+    then fetches the remaining years for that side only — concurrently,
+    instead of 2 sequential full-leaderboard pulls per career year. If the
+    probe year has the player on neither side (injury year, register noise),
+    fall back to sweeping each side across the remaining years.
     """
     from bigleague.players import mlb_years
 
     debut, last_yr = await mlb_years(first, last)
     years = list(range(debut, last_yr + 1))
 
-    pitch_frames: list[pl.DataFrame] = []
-    bat_frames: list[pl.DataFrame] = []
-    for yr in years:
-        p = await player_stats_for_year(first, last, yr, "pitcher")
-        if p is not None:
-            pitch_frames.append(p)
-        b = await player_stats_for_year(first, last, yr, "batter")
-        if b is not None:
-            bat_frames.append(b)
+    probe_year, rest_years = years[0], years[1:]
+    probe: pl.DataFrame | None = await player_stats_for_year(first, last, probe_year, "pitcher")
+    side: Literal["pitcher", "batter"] = "pitcher"
+    if probe is None:
+        probe = await player_stats_for_year(first, last, probe_year, "batter")
+        side = "batter"
 
+    if probe is not None:
+        frames = [probe, *await _career_frames_for_side(first, last, rest_years, side)]
+        return aggregate_career(frames, first, last, years, side)
+
+    # Ambiguous probe: the player has no data in the debut year. Sweep the
+    # pitcher side first (same preference order), then the batter side.
+    pitch_frames = await _career_frames_for_side(first, last, rest_years, "pitcher")
     if pitch_frames:
         return aggregate_career(pitch_frames, first, last, years, "pitcher")
+    bat_frames = await _career_frames_for_side(first, last, rest_years, "batter")
     if bat_frames:
         return aggregate_career(bat_frames, first, last, years, "batter")
     raise ValueError(f"No FanGraphs career data found for {first} {last}.")
@@ -403,7 +431,8 @@ async def top_leaderboard(
         col = col_map.get(stat.lower())
         if col is None:
             return []
-        top = df.sort(col, descending=True).head(n)
+        descending = stat.lower() not in _LOWER_IS_BETTER_STATS
+        top = df.sort(col, descending=descending, nulls_last=True).head(n)
         out: list[dict[str, Any]] = []
         for i, row in enumerate(top.iter_rows(named=True)):
             out.append(
