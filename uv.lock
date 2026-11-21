@@ -6,6 +6,9 @@ requires-python = ">=3.12"
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P1W"
 
+[options.exclude-newer-package]
+bouquet-bloom = "2026-11-22T00:00:00Z"
+
 [[package]]
 name = "anyio"
 version = "4.16.0"
@@ -47,7 +50,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bouquet-bloom", marker = "extra == 'bloom'", directory = "../bouquet/bouquet-py" },
+    { name = "bouquet-bloom", marker = "extra == 'bloom'", specifier = ">=0.1.0" },
     { name = "curl-cffi", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "matplotlib", specifier = ">=3.8" },
@@ -65,16 +68,15 @@ provides-extras = ["bloom", "dev"]
 
 [[package]]
 name = "bouquet-bloom"
-source = { directory = "../bouquet/bouquet-py" }
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "maturin", specifier = ">=1.7,<2.0" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "ruff", specifier = ">=0.14" },
-    { name = "ty", specifier = ">=0.0.1" },
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/13/06/ba351906602865ad007b74e6834e302c58269dc5ac4721f20a71c6c263c6/bouquet_bloom-0.1.0.tar.gz", hash = "sha256:efae9e88bf9c26ddaaa9516b6d97520659e887e5baffaf6fcdbb09d61b297947", size = 77460, upload-time = "2026-11-21T23:45:11.097Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f7/a0/4888c625f6684fccc9681f9651328460a401646639c0fe728e32dd18970a/bouquet_bloom-0.1.0-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:2dc82fefbbce3730029dac544725503ba6f4d24ce8cf9b567c0205ca86d7ae98", size = 237267, upload-time = "2026-11-21T23:45:04.835Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/25/db6d116b5166e76af6567da8b8fc7c42c82b8ff7bf75195c4db33a727811/bouquet_bloom-0.1.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:a75e9492f43b771b73dceec16cf67ca14a8aed361e056e26e92ef351e861a416", size = 233499, upload-time = "2026-11-21T23:45:06.183Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/e9/8f287d9b0fb6fbf3f77ca5cf10180a087aedae50cc0fd11e6164a125e14a/bouquet_bloom-0.1.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2ca9bf08dcee901de17867f701809b11e7674a8e8d59bec4fc478ba9719a8493", size = 247507, upload-time = "2026-11-21T23:45:07.57Z" },
+    { url = "https://files.pythonhosted.org/packages/db/cf/f24afa43c0cc0f5bbbbc648056783915af6d0785e9cf20cb73aeeb822a52/bouquet_bloom-0.1.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:2caa210da222e372826bfd8f18c2c5607750de6fdc5f974a13ddace4c3f17484", size = 253036, upload-time = "2026-11-21T23:45:08.931Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/80/6dea905884fad395be9c5d42b9f810f3c3a87eb4b4bcc0e5737d986a7af0/bouquet_bloom-0.1.0-cp311-abi3-win_amd64.whl", hash = "sha256:ad0365f4719fca18aaeec5a7503fde14b669261121b3adf1a467f4efb31628db", size = 167920, upload-time = "2026-11-21T23:45:10.051Z" },
 ]
 
 [[package]]
