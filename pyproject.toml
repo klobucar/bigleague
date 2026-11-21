@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 # Only the bigleague package ships; bench/ and tests/ are dev-only and would
@@ -14,6 +14,7 @@ version = "0.1.0"
 description = "Async polars-native baseball data and plotting library"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
 dependencies = [
     "polars>=0.20",
     "httpx>=0.27",
@@ -25,7 +26,8 @@ dependencies = [
 [project.optional-dependencies]
 # Optional runtime accelerator: gates negative cache lookups behind a
 # bloom filter. The library degrades gracefully without it (see cache.py).
-bloom = ["bouquet"]
+# Distribution name is `bouquet-bloom`; the import name is `bouquet`.
+bloom = ["bouquet-bloom"]
 # `dev` deliberately omits bouquet — it's an optional accelerator, not a
 # dev requirement, and the suite skips bloom-only tests when it's absent.
 # To exercise the bloom path locally: `uv sync --extra dev --extra bloom`.
@@ -53,7 +55,7 @@ package = false
 exclude-newer = "1 week"
 
 [tool.uv.sources]
-bouquet = { path = "../bouquet/bouquet-py" }
+bouquet-bloom = { path = "../bouquet/bouquet-py" }
 
 # ── ruff ───────────────────────────────────────────────────────────────────────
 [tool.ruff]
