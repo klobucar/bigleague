@@ -1,9 +1,12 @@
 # bigleague
 
-Async, polars-native baseball data and plotting library. Replaces the
-data and plotting layer of [harry-bot](https://github.com/klobucar/harry-bot)
-without depending on pybaseball or pandas. Also usable as a general-purpose
-library.
+Async, polars-native baseball data and plotting library: Statcast, FanGraphs,
+the MLB Stats API and Baseball Savant leaderboards, plus matplotlib renderers
+for strike zones, hot zones, spray charts and stadium outlines. No pybaseball
+and no pandas.
+
+It powers [harry-bot](https://github.com/klobucar/harry-bot), a Discord
+baseball bot.
 
 ## Why
 
@@ -63,10 +66,18 @@ in CI. Install bench deps: `uv pip install pybaseball pandas pyarrow`.
 ## Install
 
 ```bash
-uv sync --extra dev
+pip install bigleague
+# or
+uv add bigleague
 ```
 
 Requires Python ≥ 3.12. Tested on 3.14.
+
+To work on bigleague itself:
+
+```bash
+uv sync --extra dev
+```
 
 The `bloom` extra (the `bouquet` filter) is an **optional** runtime
 accelerator, not a dev requirement — the suite skips bloom-only tests when
@@ -113,6 +124,13 @@ except bl.FangraphsBlockedError:
 games = await bl.live_scores("NYY")
 game = await bl.next_game("NYY")
 # game = {date, time, home_team, away_team, home_probable, away_probable}
+
+season = await bl.schedule("NYY", 2025)
+# one row per game, in play order:
+# {date, start_time, game_pk, is_home, opponent, status, score, record}
+# status is "W" / "L" / "P" (postponed) / "S" (scheduled); record is the
+# running "W-L" after that game.
+last5 = [g for g in season if g["status"] in ("W", "L")][-5:]
 ```
 
 ## Cache
@@ -149,8 +167,8 @@ png = bl.stadium_outline("yankees")
 
 ```python
 bl.normalize_stadium("Guardians")  # -> "indians"  (Statcast key)
-bl.normalize_stadium("Wizards")    # -> "generic"
-bl.stadium_metadata("yankees")      # -> {"name": "Yankee Stadium", ...}
+bl.normalize_stadium("Wizards")  # -> "generic"
+bl.stadium_metadata("yankees")  # -> {"name": "Yankee Stadium", ...}
 ```
 
 ## ABS challenge data
@@ -208,19 +226,3 @@ bigleague/
 ├── fangraphs.py  # FanGraphs JSON API (curl_cffi)
 └── plots.py      # matplotlib renderers
 ```
-
-## Migration from harry-bot
-
-After bigleague is wired in, harry-bot can drop:
-- `statcast_patch.py`
-- `statcast_plots.py`
-- `statcast_stats.py`
-- `statcast.py` (the facade)
-- `fangraphs.py`
-- `mlb_api.py`
-- `pybaseball` from `pyproject.toml`
-
-Keeps:
-- `bot.py`, `commands/`, `persona.py`, `utils.py`
-- All Discord interaction logic
-- Gemini integration for `/junkstats`

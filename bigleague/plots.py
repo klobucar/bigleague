@@ -7,7 +7,7 @@ Every renderer:
   4. Calls `plt.close(fig)` and `gc.collect()` in a `finally` block —
      mandatory. matplotlib holds a C-side bitmap until close().
 
-`gc.collect()` is carried over from harry-bot because pandas
+`gc.collect()` is kept from an earlier pandas-based implementation, where
 DataFrames in matplotlib reference cycles caused ~10 MiB RSS leaks
 per chart. Polars frames are much smaller in memory; the explicit GC
 may be removable. TODO: benchmark on Fly.io and drop if it doesn't move

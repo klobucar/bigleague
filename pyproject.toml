@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 # Only the bigleague package ships; bench/ and tests/ are dev-only and would
 # otherwise trip setuptools' flat-layout auto-discovery when bigleague is
-# installed as a path dependency (e.g. by harry-bot).
+# installed as a path dependency.
 [tool.setuptools]
 packages = ["bigleague"]
 
