@@ -26,6 +26,17 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+## Gallery
+
+Each plot is a single call that returns PNG bytes. These use Shohei Ohtani's
+2025 Statcast data; `uv run python -m docs.make_gallery` regenerates them.
+
+| `strike_zone` | `hot_zones` |
+| :---: | :---: |
+| ![Strike zone plot of Ohtani's April 2025 pitches, colored by pitch type](https://raw.githubusercontent.com/klobucar/bigleague/main/docs/img/strike_zone.png) | ![Hot zone heatmap of Ohtani's 2025 batting average by zone](https://raw.githubusercontent.com/klobucar/bigleague/main/docs/img/hot_zones.png) |
+| **`spray_chart`** | **`stadium_outline`** |
+| ![Spray chart of Ohtani's 2025 batted balls at Dodger Stadium](https://raw.githubusercontent.com/klobucar/bigleague/main/docs/img/spray_chart.png) | ![Dodger Stadium outline](https://raw.githubusercontent.com/klobucar/bigleague/main/docs/img/stadium_outline.png) |
+
 ## Install
 
 ```bash
