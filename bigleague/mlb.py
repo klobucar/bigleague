@@ -1,8 +1,6 @@
 """Async wrappers around the official MLB Stats API (statsapi.mlb.com).
 
-Ported from harry-bot's `mlb_api.py` — `requests` -> `httpx`, sync ->
-async. Team ID and abbreviation tables are hand-curated; preserve them
-verbatim.
+Team ID and abbreviation tables are hand-curated; preserve them verbatim.
 """
 
 from __future__ import annotations
@@ -324,6 +322,81 @@ async def recent_results(team: str, n: int = 10, lookback_days: int = 30) -> lis
 
     out.sort(key=lambda g: g["date"])
     return out[-n:]
+
+
+async def schedule(team: str, year: int, game_type: str = "R") -> list[dict[str, Any]]:
+    """A team's full-season schedule with results and a running record.
+
+    Games come back in play order (doubleheaders by start time). Each row:
+
+    - `date`, `start_time` (UTC ISO timestamp), `game_pk`
+    - `is_home`, `opponent` (canonical abbreviation, or the team name when
+      the id is unknown)
+    - `status`: "W"/"L" for final games, "P" for postponed or suspended,
+      "S" for games not yet played
+    - `score`: "ours-theirs" for final games, otherwise ""
+    - `record`: the team's "W-L" after that game (carried forward over
+      postponed and scheduled rows)
+
+    `game_type` is the MLB Stats API code: "R" regular season (default),
+    "S" spring training, "P" postseason.
+
+    Raises ValueError if the API returns no games (e.g. a future season
+    whose schedule hasn't been published).
+    """
+    tid = _team_id(team)
+    data = await mlb_get(
+        "/schedule",
+        {"sportId": 1, "teamId": tid, "season": year, "gameType": game_type},
+    )
+
+    rows: list[dict[str, Any]] = []
+    for day in data.get("dates", []):
+        for game in day.get("games", []):
+            state = game.get("status") or {}
+            abstract = state.get("abstractGameState", "")
+            detailed = state.get("detailedState", "")
+            home = (game.get("teams") or {}).get("home") or {}
+            away = (game.get("teams") or {}).get("away") or {}
+            is_home = (home.get("team") or {}).get("id") == tid
+            ours, theirs = (home, away) if is_home else (away, home)
+            opp_team = theirs.get("team") or {}
+
+            if abstract == "Final":
+                our_runs, their_runs = ours.get("score", 0), theirs.get("score", 0)
+                won = ours.get("isWinner")
+                if won is None:
+                    won = our_runs > their_runs
+                status = "W" if won else "L"
+                score = f"{our_runs}-{their_runs}"
+            elif "Postponed" in detailed or "Suspended" in detailed:
+                status, score = "P", ""
+            else:
+                status, score = "S", ""
+
+            rows.append(
+                {
+                    "date": day.get("date", ""),
+                    "start_time": game.get("gameDate", ""),
+                    "game_pk": game.get("gamePk"),
+                    "is_home": is_home,
+                    "opponent": _TEAM_ID_TO_ABBR.get(opp_team.get("id"))
+                    or opp_team.get("name", "?"),
+                    "status": status,
+                    "score": score,
+                }
+            )
+
+    if not rows:
+        raise ValueError(f"No {game_type!r} schedule for {team.upper()} in {year}.")
+
+    rows.sort(key=lambda g: (g["date"], g["start_time"]))
+    wins = losses = 0
+    for row in rows:
+        wins += row["status"] == "W"
+        losses += row["status"] == "L"
+        row["record"] = f"{wins}-{losses}"
+    return rows
 
 
 # ---------------------------------------------------------------------------
