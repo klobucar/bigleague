@@ -4,10 +4,10 @@
 [![Python](https://img.shields.io/pypi/pyversions/bigleague)](https://pypi.org/project/bigleague/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Async, [polars](https://pola.rs)-native baseball data and plotting. Pull
-Statcast pitches, FanGraphs stats, MLB Stats API schedules and rosters, and
-Baseball Savant leaderboards into polars DataFrames, then render strike
-zones, hot zones and spray charts to PNG. No pandas, no pybaseball.
+bigleague is an async Python library for baseball data and plots. It fetches
+Statcast pitches, Baseball Savant leaderboards, FanGraphs stats, and MLB
+schedules and rosters. It uses [Polars](https://pola.rs) for tabular data and
+Matplotlib for strike zones, hot zones, and spray charts.
 
 ```python
 import asyncio
@@ -20,28 +20,11 @@ async def main() -> None:
     ohtani = await bl.resolve_id("Shohei", "Ohtani")  # MLBAM id
     df = await bl.statcast_batter(ohtani, date(2025, 4, 1), date(2025, 4, 30))
     print(bl.hot_cold_batter(df))  # {pa: 87, ab: 76, h: 22, avg: 0.289, ...}
-    png = bl.strike_zone(df, "Shohei Ohtani, April 2025")  # PNG bytes
+    png = bl.strike_zone(df, "Shohei Ohtani, April 2025")
 
 
 asyncio.run(main())
 ```
-
-## Why bigleague
-
-- **Polars everywhere.** DataFrames are polars end to end: smaller in memory,
-  faster joins, cleaner null handling. pandas is not a dependency.
-- **Async-first.** Built on httpx and asyncio, so you can fan out requests
-  without threads. Baseball Savant fetches are capped at 5 concurrent
-  requests, the rate Savant tolerates, so a big `asyncio.gather` won't get
-  you blocked.
-- **Plots without pybaseball.** Strike zones, hot-zone heatmaps, spray charts
-  and stadium outlines are drawn with matplotlib patches. All renderers
-  return PNG `bytes` and never touch the filesystem.
-- **A cache that respects fresh data.** Statcast chunks are cached as parquet.
-  Chunks that include today's date are deliberately not cached, so you never
-  get stale partial data.
-- **Typed pitch schema.** `StatcastPitch` and `STATCAST_SCHEMA` give you the
-  Statcast column set with polars dtypes.
 
 ## Install
 
@@ -53,12 +36,10 @@ uv add bigleague
 
 Requires Python 3.12 or newer. The test suite runs on 3.12, 3.13 and 3.14.
 
-Optional extra: `bigleague[bloom]` installs
-[bouquet-bloom](https://pypi.org/project/bouquet-bloom/), which puts a bloom
-filter in front of the cache so lookups for never-cached keys skip the disk.
-The cache behaves the same without it.
+Install `bigleague[bloom]` to add a Bloom filter that skips disk lookups for
+keys that have never been cached.
 
-## What's in the box
+## API
 
 | Area | Functions | Source |
 | --- | --- | --- |
@@ -69,30 +50,30 @@ The cache behaves the same without it.
 | Schedules and rosters | `schedule`, `live_scores`, `next_game`, `recent_results`, `standings`, `roster`, `injuries`, `transactions` | MLB Stats API |
 | Player lookup | `lookup`, `resolve_id`, `reverse_lookup`, `mlb_years` | Chadwick Bureau register |
 | Plots | `strike_zone`, `batter_zone`, `matchup_zone`, `hot_zones`, `spray_chart`, `stadium_outline` | matplotlib |
-| Pure stats helpers | `hot_cold_batter`, `hot_cold_pitcher`, `matchup_stats`, `hot_zones_grid`, `aggregate_career`, `season_range`, `parse_*` | computed locally |
+| Stats helpers | `hot_cold_batter`, `hot_cold_pitcher`, `matchup_stats`, `hot_zones_grid`, `aggregate_career`, `season_range`, `parse_*` | computed locally |
 | Stadiums | `normalize_stadium`, `stadium_metadata`, `stadium_team_code`, `known_stadiums` | bundled data |
 
-Everything is importable from the top level (`import bigleague as bl`) except
-`mlb.players()` and `mlb.players_multi_season()`, which would collide with the
-`bigleague.players` submodule. Use `bl.mlb.players(...)` for those.
+Use `bl.mlb.players()` and `bl.mlb.players_multi_season()` for MLB player
+lists. ABS challenge functions live in `bl.abs`.
 
 ## Examples
 
 ### Statcast
 
 ```python
-# One player, any date range. Player queries are split by calendar year, so
-# each request stays under Savant's ~25k-row cap and past years cache cleanly.
+# Player queries fetch one calendar year per request.
 df = await bl.statcast_pitcher(543037, date(2025, 4, 1), date(2025, 9, 30))
 
-# League-wide or one team. These are split into 7-day chunks because a
-# single day league-wide exceeds Savant's ~25k-row CSV cap.
+# Team and league-wide queries fetch up to seven days per request.
 week = await bl.statcast(date(2025, 4, 1), date(2025, 4, 7), team="NYY")
 
-# Player ids are MLBAM ids. Look them up from a name:
+# Look up a player's MLBAM ID or Chadwick register row.
 await bl.resolve_id("Gerrit", "Cole")  # -> 543037
 await bl.lookup("Cole", "Gerrit")  # -> polars DataFrame of register rows
 ```
+
+`StatcastPitch` defines the pitch fields. `STATCAST_SCHEMA` maps them to Polars
+types.
 
 ### FanGraphs
 
@@ -127,9 +108,12 @@ Team arguments take standard abbreviations (`"NYY"`, `"LAD"`, ...) and raise
 
 ### Plots
 
-Every renderer takes a Statcast DataFrame and a title and returns PNG bytes:
+Plot functions return PNG bytes. Use `Path.write_bytes()` to save a plot.
 
 ```python
+from pathlib import Path
+
+title = "Gerrit Cole, 2025"
 png = bl.strike_zone(df, title)  # pitch locations, colored by pitch type
 png = bl.batter_zone(df, title)
 png = bl.matchup_zone(df, title)
@@ -137,11 +121,8 @@ png = bl.hot_zones(df, title)  # 3x3 batting-average heatmap by zone
 png = bl.spray_chart(df, title, stadium_key="yankees")
 png = bl.stadium_outline("yankees")
 
-Path("zone.png").write_bytes(png)
+Path("stadium.png").write_bytes(png)
 ```
-
-Matplotlib figures are closed in a `finally` block on every render, so
-long-running services don't leak bitmaps.
 
 ### Stadiums
 
@@ -178,9 +159,9 @@ directory.
 
 ## Benchmarks
 
-The same Ohtani (660271) Statcast pulls against real Savant, each library in
-its own subprocess for clean RSS. These are the author's runs; your numbers
-will vary with your network and machine.
+Each library ran in a separate process and queried Baseball Savant for Shohei
+Ohtani (660271). In the warm run, bigleague read from its Parquet cache.
+pybaseball and pandas+pyarrow each fetched the data again.
 
 | lib            | scenario   |  rows |  frame |  peak heap |  peak RSS |  wall |
 | -------------- | ---------- | ----: | -----: | ---------: | --------: | ----: |
@@ -197,41 +178,27 @@ will vary with your network and machine.
 | pybaseball     | hotzones   |   426 | 433 KB |      99 MB |    290 MB | 2.93s |
 | pandas+pyarrow | hotzones   |   426 | 375 KB |      80 MB |    250 MB | 2.21s |
 
-- **In-memory frames are about 2x smaller** than pybaseball and about 1.5 to
-  2x smaller than pandas with the pyarrow backend, across every scenario.
-- **Peak heap and RSS** track frame size: bigleague and pandas+pyarrow are
-  comparable (Arrow under both); pybaseball is about 1.7x heavier on heap and
-  about 70% heavier on RSS.
-- **Warm reads** drop from 1.35s to 1.20s on the same window via the parquet
-  cache. pybaseball and pandas+pyarrow have no cache here, so their "warm"
-  timing is just Savant CDN noise.
-- **Player-scoped queries** chunk by calendar year rather than every 7 days,
-  so a single-season pull is one request and takes about 1.4s cold instead of
-  about 6s.
+The benchmark requires network access.
 
-Reproduce with `uv run python bench/compare_pybaseball.py`. It needs network
-access and extra packages (`uv pip install pybaseball pandas pyarrow`), and
-it isn't run in CI.
+```bash
+uv pip install pybaseball pandas pyarrow
+uv run python bench/compare_pybaseball.py
+```
 
-## Data sources and responsible use
+## Data sources
 
 bigleague is an independent project. It is not affiliated with or endorsed by
 Major League Baseball, Baseball Savant, FanGraphs or the Chadwick Bureau.
 
-It reads public endpoints that those sites don't document as a stable API:
-
-- **Baseball Savant** CSV endpoints, rate-limited by the library to 5
-  concurrent requests.
-- **FanGraphs** JSON endpoints, fetched with
-  [curl_cffi](https://github.com/lexiforest/curl_cffi) Chrome impersonation,
-  because Cloudflare blocks plain TLS clients. Expect the occasional
-  `FangraphsBlockedError`; it is transient.
+- **Baseball Savant** CSV endpoints. bigleague runs up to five Savant requests
+  concurrently.
+- **FanGraphs** JSON endpoints. Requests blocked by Cloudflare raise
+  `FangraphsBlockedError`.
 - **MLB Stats API** (`statsapi.mlb.com`).
 - **Chadwick Bureau register** for player ids, fetched from a pinned commit.
 
-Endpoints and terms can change without notice, so check each provider's terms
-of use before building anything commercial on top. Keep the cache on, since
-repeat queries shouldn't hit these servers again.
+Check each provider's terms before using the data commercially. Keep the
+cache enabled to avoid repeat requests.
 
 ## Development
 
@@ -244,10 +211,8 @@ uv run ruff check . && uv run ruff format --check .
 uv run ty check
 ```
 
-All HTTP in the test suite is mocked (`respx` for httpx, monkey-patching for
-curl_cffi), and `tests/conftest.py` sets `BIGLEAGUE_NO_CACHE=1`. A VCR layer
-(`pytest-recording`) is wired up but no cassettes are checked in; to record
-one against a live endpoint:
+The tests mock HTTP requests and disable the cache. To record a live response
+with `pytest-recording`, run the Savant tests in record mode.
 
 ```bash
 uv run pytest tests/test_savant.py --record-mode=once
