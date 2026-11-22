@@ -1,0 +1,29 @@
+stadium_paths.csv.gz: park outlines
+
+The outline paths are the `MLBStadiumsPathData` table from the GeomMLBStadiums
+R package by Ben Dilday (https://github.com/bdilday/GeomMLBStadiums), as
+redistributed in pybaseball (https://github.com/jldbc/pybaseball). The columns
+were reduced to team, segment, x and y, and coordinates rounded to two decimals.
+They are in the same pixel grid as Baseball Savant's hc_x / hc_y hit coordinates.
+
+MIT License
+
+Copyright (c) 2018 Ben Dilday
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

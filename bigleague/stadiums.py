@@ -1,9 +1,9 @@
 """Stadium metadata + name normalization, owned by bigleague.
 
-Replaces pybaseball's `mlbstadiums.csv` lookup. All 30 active parks are
-bundled inline so we work offline. Dimensions are LF / CF / RF distances
-to the wall in feet, used by `plots.spray_chart` and `plots.stadium_outline`
-to draw the outfield arc.
+All 30 active parks are bundled inline so we work offline. Dimensions are
+LF / CF / RF distances to the wall in feet, used to label the diagrams drawn
+by `plots.spray_chart` and `plots.stadium_outline`. The parks' shapes come from
+the outline data in `bigleague.stadium_paths`.
 
 `STADIUM_ALIASES` covers franchise renames where Statcast still uses the
 old key (e.g. CLE = "indians" even after the 2022 rename to Guardians).
