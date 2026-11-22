@@ -290,11 +290,125 @@ async def pitcher_percentile_ranks(player_id: int, year: int) -> pl.DataFrame:
     return _filter_by_player_id(df, player_id)
 
 
-async def pitcher_pitch_arsenal(player_id: int, year: int) -> pl.DataFrame:
-    """Pitch arsenal for one pitcher (filtered from leaderboard)."""
+# Savant's pitch-code → display name, for the arsenal frame's `pitch_name`.
+_PITCH_NAMES: dict[str, str] = {
+    "FF": "4-Seam Fastball",
+    "SI": "Sinker",
+    "FC": "Cutter",
+    "SL": "Slider",
+    "CH": "Changeup",
+    "CU": "Curveball",
+    "FS": "Split-Finger",
+    "KN": "Knuckleball",
+    "ST": "Sweeper",
+    "SV": "Slurve",
+}
+
+_ARSENAL_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
+    "pitch_type": pl.String,
+    "pitch_name": pl.String,
+    "avg_speed": pl.Float64,
+    "avg_spin": pl.Float64,
+    "pitch_usage": pl.Float64,
+}
+
+
+def _to_float(value: object) -> float | None:
+    """A leaderboard cell as a float; blank or unparseable cells become None.
+
+    The `n_` board delivers its percentages as strings, with "" for pitches a
+    pitcher doesn't throw, so every cell goes through here.
+    """
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _player_row(df: pl.DataFrame, player_id: int) -> dict[str, object]:
+    """The one row for `player_id` from a wide `pitch-arsenals` board, or {}."""
+    if df.is_empty() or "pitcher" not in df.columns:
+        return {}
+    rows = df.filter(pl.col("pitcher") == player_id)
+    return rows.row(0, named=True) if not rows.is_empty() else {}
+
+
+def _arsenal_frame(
+    player_id: int, speed: pl.DataFrame, spin: pl.DataFrame, usage: pl.DataFrame
+) -> pl.DataFrame:
+    """Reshape the three wide `pitch-arsenals` boards into one row per pitch."""
+    speed_row = _player_row(speed, player_id)
+    spin_row = _player_row(spin, player_id)
+    usage_row = _player_row(usage, player_id)
+
+    # Pitch codes in the order Savant lists them (ff, si, fc, sl, ...), taken
+    # from the column names so a pitch Savant adds later is picked up too.
+    codes = [col.removesuffix("_avg_speed") for col in speed_row if col.endswith("_avg_speed")]
+
+    rows: list[dict[str, object]] = []
+    for code in codes:
+        mph = _to_float(speed_row.get(f"{code}_avg_speed"))
+        rpm = _to_float(spin_row.get(f"{code}_avg_spin"))
+        pct = _to_float(usage_row.get(f"n_{code}"))
+        if mph is None and rpm is None and pct is None:
+            continue  # a pitch this pitcher doesn't throw
+        pitch = code.upper()
+        rows.append(
+            {
+                "pitch_type": pitch,
+                "pitch_name": _PITCH_NAMES.get(pitch, pitch),
+                "avg_speed": mph,
+                "avg_spin": rpm,
+                "pitch_usage": pct,
+            }
+        )
+    return pl.DataFrame(rows, schema=_ARSENAL_SCHEMA)
+
+
+async def pitcher_pitch_arsenal(player_id: int, year: int, min_pitches: int = 10) -> pl.DataFrame:
+    """One row per pitch a pitcher throws: velocity, spin and usage.
+
+    Columns: `pitch_type` ("FF", "SL", ...), `pitch_name`, `avg_speed` (mph),
+    `avg_spin` (rpm) and `pitch_usage` (percent of pitches). Rows follow
+    Savant's pitch order; `stats.parse_pitch_arsenal` turns the frame into a
+    usage-sorted list. The frame is empty if the pitcher isn't on the board.
+
+    Savant publishes these on the wide `/leaderboard/pitch-arsenals` board, one
+    row per pitcher, with a separate request for each measure, so the three
+    are fetched concurrently and pivoted to long form here. `min_pitches`
+    (default 10) is Savant's minimum pitch count; keep it low so fringe pitches
+    aren't dropped.
+
+    The run-value board this function used to read is now
+    `pitcher_pitch_arsenal_stats`.
+    """
+    base = {"year": str(year), "min": str(min_pitches), "hand": "", "csv": "true"}
+    speed, spin, usage = await asyncio.gather(
+        *(
+            _csv_leaderboard("/leaderboard/pitch-arsenals", {**base, "type": kind})
+            for kind in ("avg_speed", "avg_spin", "n_")
+        )
+    )
+    return _arsenal_frame(player_id, speed, spin, usage)
+
+
+async def pitcher_pitch_arsenal_stats(
+    player_id: int, year: int, min_pitches: int = 100
+) -> pl.DataFrame:
+    """Run-value stats per pitch for one pitcher (filtered from the leaderboard).
+
+    This is Savant's `pitch-arsenal-stats` board: run value, whiff and
+    strikeout rates, wOBA and the like, one row per pitch type. It has no
+    velocity or spin; use `pitcher_pitch_arsenal` for those. Pitches under
+    `min_pitches` (default 100) are left off the board by Savant.
+    """
     df = await _csv_leaderboard(
         "/leaderboard/pitch-arsenal-stats",
-        {"type": "pitcher", "year": str(year), "min": "100", "csv": "true"},
+        {"type": "pitcher", "year": str(year), "min": str(min_pitches), "csv": "true"},
     )
     return _filter_by_player_id(df, player_id)
 
