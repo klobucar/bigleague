@@ -1,0 +1,90 @@
+name: Release to PyPI
+
+# Publishes bigleague through PyPI Trusted Publishing. The publish job has no
+# stored API token: PyPI exchanges GitHub's OIDC identity for a short-lived
+# project-scoped credential.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify, but do not publish"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Never let two release runs overlap: PyPI uploads are immutable.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: test and build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.12"
+          # Release artifacts must not inherit writable caches populated by
+          # lower-trust branch or pull-request workflows.
+          enable-cache: false
+
+      - name: verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          manifest="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "pyproject.toml: $manifest"
+          echo "git tag:        $tag"
+          if [ "$manifest" != "$tag" ]; then
+            echo "::error::tag v$tag does not match pyproject.toml version $manifest"
+            exit 1
+          fi
+
+      - run: uv sync --extra dev --locked
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ty check
+      - run: uv run --no-sync pytest
+      # The bloom tests skip themselves without bouquet-bloom, so run the
+      # suite again with it installed (same as the `bloom` profile in CI).
+      - run: uv sync --extra dev --extra bloom --locked
+      - run: uv run --no-sync pytest
+      - run: uv build --out-dir dist
+      - run: uvx --from twine twine check dist/*
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    # workflow_dispatch is rehearsal-only. An immutable upload must originate
+    # from a version tag, even if someone turns off its dry_run input.
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read # download the already-built artifact only
+      id-token: write # mint the OIDC token that PyPI trades for a short-lived upload credential
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist
+          skip-existing: false

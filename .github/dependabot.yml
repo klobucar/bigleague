@@ -1,0 +1,31 @@
+version: 2
+
+updates:
+  # SHA-pinned actions do not float, which is the point — but it also means
+  # nothing gets security fixes without something bumping them. Dependabot
+  # rewrites both the SHA and the `# vX.Y.Z` trailing comment, so the pins
+  # stay both current and readable.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # `uv.lock` pins every dependency. pyproject.toml already sets a one-week
+  # `exclude-newer` cooldown for local resolution; the same window is applied
+  # here so Dependabot does not propose a release that is hours old.
+  - package-ecosystem: uv
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      # One PR for the routine churn; majors still come through separately
+      # so a breaking bump (polars, matplotlib) is never buried in a batch.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
