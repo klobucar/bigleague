@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/klobucar/bigleague/main/docs/img/banner.jpg" alt="bigleague: baseball data and plots. An anime girl in a baseball jersey points at a glowing strike-zone heatmap." width="100%">
+</p>
+
 # bigleague
 
 [![PyPI](https://img.shields.io/pypi/v/bigleague)](https://pypi.org/project/bigleague/)
