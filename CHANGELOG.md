@@ -6,6 +6,8 @@ versions may break.
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-11-21
+
 Initial public release.
 
 - **Statcast.** Pitch-level data for a player, a team or the league
