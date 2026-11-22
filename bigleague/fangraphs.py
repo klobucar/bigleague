@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import date
 from typing import Any, Literal
 
@@ -74,6 +75,31 @@ def _name_match(df: pl.DataFrame, first: str, last: str) -> pl.DataFrame:
         return df.head(0)
     target = f"{first.lower()} {last.lower()}"
     return df.filter(pl.col("Name").str.to_lowercase() == target)
+
+
+def _name_filter(first: str, last: str) -> Callable[[dict[str, Any]], bool]:
+    """A row predicate with the same meaning as `_name_match`, for raw records.
+
+    `_name_match` compares the lowercased, tag-stripped `Name` to "first last".
+    This does the same on a decoded JSON record, so a lookup can drop the rest
+    of the league before building a frame.
+    """
+    target = f"{first.lower()} {last.lower()}"
+
+    def keep(record: dict[str, Any]) -> bool:
+        name = _FG_HTML_TAG_RE.sub("", str(record.get("Name", ""))).strip()
+        return name.lower() == target
+
+    return keep
+
+
+async def _player_board(
+    year: int, kind: Literal["bat", "pit"], first: str, last: str
+) -> pl.DataFrame:
+    """One season's leaderboard, reduced to the named player's rows."""
+    return await asyncio.to_thread(
+        _fetch_leaderboard_sync, year, year, kind, 1, _name_filter(first, last)
+    )
 
 
 def _strip_html(df: pl.DataFrame) -> pl.DataFrame:
@@ -158,7 +184,16 @@ def _fetch_leaderboard_sync(
     end_season: int,
     kind: Literal["bat", "pit"],
     qual: int | str = 1,
+    keep: Callable[[dict[str, Any]], bool] | None = None,
 ) -> pl.DataFrame:
+    """Fetch a season leaderboard as a frame.
+
+    `keep`, if given, is applied to the decoded JSON records *before* the frame
+    is built. The endpoint always returns the whole league (about 7 MB of JSON,
+    500+ columns per row), so a lookup of one player that built the full frame
+    and then filtered it held two copies of the league at peak. Filtering the
+    records first leaves only the matching rows to turn into a frame.
+    """
     if kind not in ("bat", "pit"):
         raise ValueError(f"kind must be 'bat' or 'pit', got {kind!r}")
     # FanGraphs leaders API: `season1` is the START year and `season` is the
@@ -177,6 +212,8 @@ def _fetch_leaderboard_sync(
         "pageitems": 2000,
     }
     rows = _fg_get(params).get("data") or []
+    if keep is not None:
+        rows = [r for r in rows if keep(r)]
     if not rows:
         return pl.DataFrame()
     return _rows_to_df(rows)
@@ -326,7 +363,7 @@ async def player_stats_for_year(
     """
     try:
         kind: Literal["bat", "pit"] = "pit" if player_type == "pitcher" else "bat"
-        df = await leaderboard(year, kind)
+        df = await _player_board(year, kind, first, last)
         if df.is_empty():
             return None
         res = _name_match(df, first, last)
@@ -342,7 +379,7 @@ async def player_stats_for_year(
 
 async def player_stats(first: str, last: str, year: int) -> dict[str, Any]:
     """FanGraphs season stats for a player; auto-detects pitcher vs batter."""
-    pitch_df = await leaderboard(year, "pit")
+    pitch_df = await _player_board(year, "pit", first, last)
     if not pitch_df.is_empty():
         row = _name_match(pitch_df, first, last)
         if not row.is_empty():
@@ -353,7 +390,7 @@ async def player_stats(first: str, last: str, year: int) -> dict[str, Any]:
                 "stats": _player_stats_from_row(r, _PITCHING_KEYS),
             }
 
-    bat_df = await leaderboard(year, "bat")
+    bat_df = await _player_board(year, "bat", first, last)
     if not bat_df.is_empty():
         row = _name_match(bat_df, first, last)
         if not row.is_empty():

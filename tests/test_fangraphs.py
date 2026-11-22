@@ -461,3 +461,80 @@ async def test_playoff_odds_403_raises_blocked(monkeypatch: pytest.MonkeyPatch) 
     _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(403)))
     with pytest.raises(fangraphs.FangraphsBlockedError):
         await fangraphs.playoff_odds()
+
+
+# ── single-player lookups filter the league before building a frame ───────────
+
+_LEAGUE = [
+    {"Name": '<a href="statss.aspx?playerid=1">Aaron Judge</a>', "Team": "NYY", "WAR": 8.0},
+    {"Name": '<a href="statss.aspx?playerid=2">Mike Trout</a>', "Team": "LAA", "WAR": 6.0},
+    {"Name": "Juan Soto", "Team": "NYM", "WAR": 7.0},
+    {"Name": None, "Team": "—", "WAR": 0.0},
+]
+
+
+def test_name_filter_matches_name_match_semantics() -> None:
+    """The record-level filter must agree with `_name_match` on a built frame,
+    including anchor tags, case, surrounding whitespace and null names."""
+    records = [*_LEAGUE, {"Name": "  <b>AARON JUDGE</b> "}, {"Name": "Aaron Judgement"}]
+    keep = fangraphs._name_filter("aaron", "JUDGE")
+    kept = [r for r in records if keep(r)]
+
+    via_frame = fangraphs._name_match(fangraphs._rows_to_df(records), "aaron", "JUDGE")
+    assert len(kept) == via_frame.height == 2
+    assert fangraphs._name_match(fangraphs._rows_to_df(kept), "aaron", "judge").height == 2
+
+
+async def test_player_lookup_builds_a_frame_of_only_the_matching_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The point of the filter: the whole league is never turned into a frame
+    (the endpoint returns ~7 MB of JSON and 500+ columns per row)."""
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(200, {"data": _LEAGUE})))
+    built: list[int] = []
+    real = fangraphs._rows_to_df
+
+    def _spy(rows: list[dict[str, Any]]) -> pl.DataFrame:
+        built.append(len(rows))
+        return real(rows)
+
+    monkeypatch.setattr(fangraphs, "_rows_to_df", _spy)
+
+    df = await fangraphs.player_stats_for_year("Aaron", "Judge", 2024, "batter")
+
+    assert built == [1]  # one row, not the league's four
+    assert df is not None
+    assert df["Team"].to_list() == ["NYY"]
+    assert df["_year"].to_list() == [2024]
+
+
+async def test_player_stats_filters_both_boards(monkeypatch: pytest.MonkeyPatch) -> None:
+    pit_league = [
+        {"Name": "Gerrit Cole", "Team": "NYY", "ERA": 3.5},
+        {"Name": "Paul Skenes", "Team": "PIT", "ERA": 1.9},
+    ]
+
+    def _get(_url, params, **_kw):
+        return _fake_resp(200, {"data": pit_league if params["stats"] == "pit" else _LEAGUE})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+    built: list[int] = []
+    real = fangraphs._rows_to_df
+    monkeypatch.setattr(
+        fangraphs, "_rows_to_df", lambda rows: (built.append(len(rows)), real(rows))[1]
+    )
+
+    out = await fangraphs.player_stats("Aaron", "Judge", 2024)  # not a pitcher: tries both
+
+    assert out["type"] == "batter"
+    assert out["team"] == "NYY"
+    assert built == [1]  # pitcher board had no match, so no frame; batter board: 1 row
+
+
+async def test_public_leaderboards_still_return_the_whole_league(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only single-player lookups filter; `leaderboard` is unchanged."""
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(200, {"data": _LEAGUE})))
+    df = await fangraphs.leaderboard(2024, "bat")
+    assert df.height == len(_LEAGUE)

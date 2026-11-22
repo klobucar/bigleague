@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import polars as pl
@@ -132,17 +136,55 @@ def test_stadium_outline_unknown_raises() -> None:
         plots.stadium_outline("not_a_park")
 
 
-def test_close_fig_called_in_finally() -> None:
-    """Even if savefig fails, plt.close() must run (no leaked figures)."""
-    from unittest.mock import MagicMock
-
+def test_gc_runs_even_when_saving_fails() -> None:
+    """A figure is a web of reference cycles holding a bitmap: the collection
+    in `finally` must run even if rendering blows up."""
     df = _zone_df()
-    fake_fig, fake_ax = MagicMock(), MagicMock()
     with (
-        patch("bigleague.plots.plt") as mock_plt,
         patch("bigleague.plots._save_png", side_effect=RuntimeError("boom")),
+        patch("bigleague.plots.gc.collect") as mock_gc,
+        pytest.raises(RuntimeError, match="boom"),
     ):
-        mock_plt.subplots.return_value = (fake_fig, fake_ax)
-        with pytest.raises(RuntimeError, match="boom"):
-            plots.strike_zone(df, "Test")
-        mock_plt.close.assert_called_once_with(fake_fig)
+        plots.strike_zone(df, "Test")
+    mock_gc.assert_called_once()
+
+
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+
+
+def _run_python(code: str) -> subprocess.CompletedProcess[str]:
+    """Run `code` in a fresh interpreter, so module state from other tests
+    can't leak into what these tests assert about imports."""
+    env = {**os.environ, "PYTHONPATH": _PROJECT_ROOT, "BIGLEAGUE_NO_CACHE": "1"}
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+
+def test_importing_bigleague_does_not_import_matplotlib() -> None:
+    """matplotlib costs ~40 MB resident; processes that never plot shouldn't pay."""
+    out = _run_python(
+        "import sys, bigleague\n"
+        "assert 'matplotlib' not in sys.modules, 'matplotlib was imported'\n"
+        "assert 'matplotlib.pyplot' not in sys.modules\n"
+    )
+    assert out.returncode == 0, out.stderr
+
+
+def test_rendering_works_without_pyplot_and_leaves_the_backend_alone() -> None:
+    out = _run_python(
+        "import sys, matplotlib, polars as pl, bigleague as bl\n"
+        "matplotlib.use('svg')  # the caller's choice\n"
+        "df = pl.DataFrame({'plate_x': [0.0, 0.5], 'plate_z': [2.5, 3.0],\n"
+        "                   'pitch_type': ['FF', 'SL']})\n"
+        "png = bl.strike_zone(df, 't')\n"
+        "assert png.startswith(b'\\x89PNG'), png[:8]\n"
+        "assert 'matplotlib.pyplot' not in sys.modules, 'pyplot was imported'\n"
+        "assert matplotlib.get_backend() == 'svg', matplotlib.get_backend()\n"
+    )
+    assert out.returncode == 0, out.stderr

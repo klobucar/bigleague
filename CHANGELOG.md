@@ -43,6 +43,22 @@ versions may break.
   MLB years. Namesake order is unchanged. People with only a FanGraphs or
   Baseball Reference id, or only MLB years, are still returned.
 
+- **`import bigleague` no longer imports matplotlib or numpy.** They cost about
+  40 MB of resident memory (94 MB → 55 MB after import, same on every run),
+  which a process that never plots shouldn't pay. They are imported on the
+  first plot. Plots are now built on `matplotlib.figure.Figure` instead of
+  pyplot, so bigleague no longer calls `matplotlib.use("Agg")` at import
+  (your backend is left alone) and there is no global figure registry. The
+  PNG output is unchanged. The `gc.collect()` after each render stays: without
+  it, 40 renders ended 39 MB higher.
+- `player_stats`, `player_stats_for_year` and `career_stats` filter the
+  FanGraphs league board down to the requested player before building a frame,
+  instead of building a frame of every player and then filtering it. The
+  endpoint returns the whole league (about 7 MB of JSON, 500+ columns per
+  row). One `player_stats` call peaked 114 MB above its starting memory before
+  and 72 MB after. `leaderboard`, `batting_stats` and the other public
+  leaderboards still return the full frame.
+
 ### Added
 
 - `pitcher_pitch_arsenal_stats`, the Savant run-value board for one pitcher.
