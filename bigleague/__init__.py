@@ -36,6 +36,7 @@ from bigleague.mlb import (
     next_game,
     recent_results,
     roster,
+    schedule,
     standings,
     transactions,
 )
@@ -150,6 +151,7 @@ __all__ = [
     "reverse_lookup",
     "roster",
     "running_splits",  # deprecated alias for sprint_speed
+    "schedule",
     "season_range",
     "spray_chart",
     "sprint_speed",
