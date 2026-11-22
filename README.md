@@ -62,7 +62,10 @@ yankees = await bl.statcast(date(2025, 4, 1), date(2025, 4, 7), team="NYY")
 ```
 
 `resolve_id` looks up an MLBAM ID in the Chadwick Bureau register. Use
-`lookup("Ohtani", "Shohei")` for the register rows.
+`lookup("Ohtani", "Shohei")` for the register rows. The register is loaded once
+per process, pruned to the roughly 128,000 people who have an id or MLB years
+(about 6 MB), and shared by `resolve_id`, `lookup`, `reverse_lookup` and
+`mlb_years`.
 
 `statcast_batter` and `statcast_pitcher` take a date range. `statcast` takes
 an optional team and splits the range into requests of up to seven days.
@@ -70,8 +73,11 @@ bigleague allows up to five concurrent Savant requests. See
 `STATCAST_SCHEMA` for the pitch columns and their Polars types.
 
 Savant leaderboards include sprint speed, expected stats, pitch arsenals,
-and pitch movement. Automated Ball-Strike challenge data is available under
-`bl.abs`.
+and pitch movement. `pitcher_pitch_arsenal(player_id, year)` returns one row
+per pitch with `avg_speed`, `avg_spin` and `pitch_usage`, and
+`stats.parse_pitch_arsenal` turns that frame into a usage-sorted list. For run
+values and whiff rates per pitch, use `pitcher_pitch_arsenal_stats`. Automated
+Ball-Strike challenge data is available under `bl.abs`.
 
 ```python
 speed = await bl.sprint_speed(2025)
@@ -113,10 +119,14 @@ through `bl.mlb.players` and
 
 Historical Statcast data is cached as Parquet under `~/.bigleague/cache`.
 Chunks ending today or later are fetched each time. The Chadwick player
-register uses the same directory.
+register is cached in the same directory as `chadwick_people.v2.parquet`
+(about 1.4 MB, pruned to people with an id). A cache written by bigleague 0.1.0
+is converted automatically.
 
 Set `BIGLEAGUE_CACHE_DIR` to move the cache or `BIGLEAGUE_NO_CACHE=1` to skip
-cache reads and writes for a run. Statcast entries stay on disk until you
+cache reads and writes for a run. The player register is still kept in memory
+for the life of the process with `BIGLEAGUE_NO_CACHE=1`; it just isn't read
+from or written to disk. Statcast entries stay on disk until you
 remove them. Use `bl.cache.size()` to check their size and `bl.cache.clear()`
 to remove them.
 
