@@ -8,6 +8,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["bigleague"]
 
+# PEP 561 marker: the package is annotated, so type checkers should use it.
+[tool.setuptools.package-data]
+bigleague = ["py.typed"]
+
 [project]
 name = "bigleague"
 version = "0.1.0"
@@ -15,6 +19,33 @@ description = "Async polars-native baseball data and plotting library"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
+authors = [{ name = "Jonathon Klobucar" }]
+keywords = [
+    "baseball",
+    "mlb",
+    "statcast",
+    "fangraphs",
+    "sabermetrics",
+    "polars",
+    "matplotlib",
+    "asyncio",
+]
+# No `License ::` classifier: it is superseded by the SPDX `license`
+# expression above, and setuptools rejects both together.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Typing :: Typed",
+]
 dependencies = [
     "polars>=0.20",
     "httpx>=0.27",
@@ -22,6 +53,12 @@ dependencies = [
     "matplotlib>=3.8",
     "numpy>=1.26",
 ]
+
+[project.urls]
+Homepage = "https://github.com/klobucar/bigleague"
+Repository = "https://github.com/klobucar/bigleague"
+Issues = "https://github.com/klobucar/bigleague/issues"
+Changelog = "https://github.com/klobucar/bigleague/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # Optional runtime accelerator: gates negative cache lookups behind a
