@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from pathlib import Path
 
 import httpx
 import polars as pl
 import pytest
 import respx
-from bigleague import savant
+from bigleague import savant, stats
 from bigleague.cache import StatcastCache
 from bigleague.schema import STATCAST_SCHEMA
 
@@ -326,3 +327,184 @@ def test_get_client_returns_fresh_client_per_event_loop() -> None:
 
     assert asyncio.run(_same_loop_reuses())
     asyncio.run(http_mod.close_client())
+
+
+# ── pitch arsenal ────────────────────────────────────────────────────────────
+#
+# The fixtures are real rows from Savant (2026 season, fetched live), trimmed to
+# five pitchers with their exact bytes: UTF-8 BOM, quoted ids, "" for pitches
+# not thrown on the `n_` board. An earlier version of these tests fed hand-built
+# frames with `avg_speed` columns to `parse_pitch_arsenal`; the endpoint it
+# actually used never returns such a column, so the pair always returned [].
+
+_FIXTURES = Path(__file__).parent / "fixtures" / "savant"
+_ARSENALS_URL = "https://baseballsavant.mlb.com/leaderboard/pitch-arsenals"
+_ARSENAL_STATS_URL = "https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats"
+_ARSENAL_BOARDS = {
+    "avg_speed": "pitch_arsenals_avg_speed.csv",
+    "avg_spin": "pitch_arsenals_avg_spin.csv",
+    "n_": "pitch_arsenals_n.csv",
+}
+SKUBAL = 669373
+WALDRON = 663362  # throws a knuckleball
+VAUGHN = 683734  # a position player: one pitch, 100% knuckleball
+FRIED = 608331  # not on the min=100 run-value board at all
+
+
+def _fixture(name: str) -> bytes:
+    return (_FIXTURES / name).read_bytes()
+
+
+def _mock_arsenals() -> respx.Route:
+    """Serve the three `pitch-arsenals` boards, picked by the `type` param."""
+
+    def _by_type(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_fixture(_ARSENAL_BOARDS[request.url.params["type"]]))
+
+    return respx.get(_ARSENALS_URL).mock(side_effect=_by_type)
+
+
+def test_arsenal_fixtures_have_the_layout_the_endpoint_really_returns() -> None:
+    """Guard the fixtures themselves: they must keep Savant's real columns."""
+    speed = pl.read_csv(_FIXTURES / _ARSENAL_BOARDS["avg_speed"])
+    assert speed.columns == [
+        "last_name, first_name",
+        "pitcher",
+        *(f"{p}_avg_speed" for p in ["ff", "si", "fc", "sl", "ch", "cu", "fs", "kn", "st", "sv"]),
+    ]
+    assert pl.read_csv(_FIXTURES / _ARSENAL_BOARDS["n_"]).schema["n_ff"] == pl.String
+    assert (_FIXTURES / _ARSENAL_BOARDS["n_"]).read_bytes().startswith(b"\xef\xbb\xbf")  # BOM
+    runvalue = pl.read_csv(_FIXTURES / "pitch_arsenal_stats_pitcher.csv", ignore_errors=True)
+    assert "avg_speed" not in runvalue.columns  # why the old pairing returned nothing
+
+
+@respx.mock
+async def test_pitcher_pitch_arsenal_returns_velocity_spin_and_usage() -> None:
+    _mock_arsenals()
+    df = await savant.pitcher_pitch_arsenal(SKUBAL, 2026)
+
+    assert df.columns == ["pitch_type", "pitch_name", "avg_speed", "avg_spin", "pitch_usage"]
+    # Skubal, 2026, as read off Baseball Savant.
+    assert df.select("pitch_type", "avg_speed", "avg_spin", "pitch_usage").rows() == [
+        ("FF", 96.8, 2332.0, 38.0),
+        ("SI", 96.7, 2193.0, 17.5),
+        ("SL", 89.7, 2203.0, 13.9),
+        ("CH", 87.7, 1847.0, 25.6),
+        ("CU", 80.4, 2547.0, 5.0),
+    ]
+    assert df["pitch_name"].to_list() == [
+        "4-Seam Fastball",
+        "Sinker",
+        "Slider",
+        "Changeup",
+        "Curveball",
+    ]
+
+
+@respx.mock
+async def test_parse_pitch_arsenal_of_the_real_boards_is_correct_and_usage_sorted() -> None:
+    """The regression: pitcher_pitch_arsenal + parse_pitch_arsenal used to
+    return [] for every pitcher and season."""
+    _mock_arsenals()
+    out = stats.parse_pitch_arsenal(await savant.pitcher_pitch_arsenal(SKUBAL, 2026))
+
+    assert out == [
+        {"pitch": "FF", "mph": 96.8, "spin": 2332.0, "usage_pct": 38.0},
+        {"pitch": "CH", "mph": 87.7, "spin": 1847.0, "usage_pct": 25.6},
+        {"pitch": "SI", "mph": 96.7, "spin": 2193.0, "usage_pct": 17.5},
+        {"pitch": "SL", "mph": 89.7, "spin": 2203.0, "usage_pct": 13.9},
+        {"pitch": "CU", "mph": 80.4, "spin": 2547.0, "usage_pct": 5.0},
+    ]
+
+
+@respx.mock
+async def test_pitcher_pitch_arsenal_requests_three_boards_with_a_low_minimum() -> None:
+    route = _mock_arsenals()
+    await savant.pitcher_pitch_arsenal(SKUBAL, 2026)
+
+    assert route.call_count == 3
+    sent = [dict(c.request.url.params) for c in route.calls]
+    assert {p["type"] for p in sent} == {"avg_speed", "avg_spin", "n_"}
+    for p in sent:
+        # min=10, not 100: the old board's minimum dropped Skubal's SL and CU.
+        assert (p["year"], p["min"], p["hand"], p["csv"]) == ("2026", "10", "", "true")
+
+
+@respx.mock
+async def test_pitcher_pitch_arsenal_min_pitches_is_passed_through() -> None:
+    route = _mock_arsenals()
+    await savant.pitcher_pitch_arsenal(SKUBAL, 2026, min_pitches=50)
+    assert {c.request.url.params["min"] for c in route.calls} == {"50"}
+
+
+@respx.mock
+async def test_arsenal_handles_a_knuckleball_and_blank_usage_cells() -> None:
+    _mock_arsenals()
+    out = stats.parse_pitch_arsenal(await savant.pitcher_pitch_arsenal(WALDRON, 2026))
+    by_pitch = {p["pitch"]: p for p in out}
+
+    assert set(by_pitch) == {"FF", "SI", "FC", "KN", "ST"}  # the "" cells are pitches not thrown
+    assert out[0]["pitch"] == "KN"  # his most-used pitch
+    assert by_pitch["KN"]["usage_pct"] == 30.1
+
+
+@respx.mock
+async def test_arsenal_for_a_one_pitch_pitcher() -> None:
+    _mock_arsenals()
+    out = stats.parse_pitch_arsenal(await savant.pitcher_pitch_arsenal(VAUGHN, 2026))
+    assert [(p["pitch"], p["usage_pct"]) for p in out] == [("KN", 100.0)]
+
+
+@respx.mock
+async def test_arsenal_for_a_pitcher_not_on_the_board_is_empty_but_typed() -> None:
+    _mock_arsenals()
+    df = await savant.pitcher_pitch_arsenal(1, 2026)
+    assert df.is_empty()
+    assert df.columns == ["pitch_type", "pitch_name", "avg_speed", "avg_spin", "pitch_usage"]
+    assert stats.parse_pitch_arsenal(df) == []
+
+
+@respx.mock
+async def test_arsenal_tolerates_empty_boards() -> None:
+    respx.get(_ARSENALS_URL).mock(return_value=httpx.Response(200, content=b""))
+    df = await savant.pitcher_pitch_arsenal(SKUBAL, 2026)
+    assert df.is_empty()
+
+
+@respx.mock
+async def test_arsenal_includes_pitchers_the_run_value_board_leaves_out() -> None:
+    """Fried has no row on the min=100 run-value board, but throws seven pitches."""
+    _mock_arsenals()
+    respx.get(_ARSENAL_STATS_URL).mock(
+        return_value=httpx.Response(200, content=_fixture("pitch_arsenal_stats_pitcher.csv"))
+    )
+    assert (await savant.pitcher_pitch_arsenal_stats(FRIED, 2026)).is_empty()
+    assert (await savant.pitcher_pitch_arsenal(FRIED, 2026)).height == 7
+
+
+@respx.mock
+async def test_pitcher_pitch_arsenal_stats_is_the_run_value_board() -> None:
+    route = respx.get(_ARSENAL_STATS_URL).mock(
+        return_value=httpx.Response(200, content=_fixture("pitch_arsenal_stats_pitcher.csv"))
+    )
+    df = await savant.pitcher_pitch_arsenal_stats(SKUBAL, 2026)
+
+    params = dict(route.calls.last.request.url.params)
+    assert (params["type"], params["year"], params["min"], params["csv"]) == (
+        "pitcher",
+        "2026",
+        "100",
+        "true",
+    )
+    assert df["pitch_type"].to_list() == ["FF", "CH", "SI"]  # only 3 clear min=100
+    assert "run_value_per_100" in df.columns
+    assert "avg_speed" not in df.columns
+    # ...which is why parse_pitch_arsenal can't read it:
+    assert stats.parse_pitch_arsenal(df) == []
+
+
+def test_pitcher_pitch_arsenal_stats_is_exported() -> None:
+    import bigleague
+
+    assert bigleague.pitcher_pitch_arsenal_stats is savant.pitcher_pitch_arsenal_stats
+    assert "pitcher_pitch_arsenal_stats" in bigleague.__all__
