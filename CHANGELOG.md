@@ -6,6 +6,8 @@ versions may break.
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-11-21
+
 ### Fixed
 
 - **Player lookups no longer re-read the whole Chadwick register on every
