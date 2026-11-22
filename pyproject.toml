@@ -27,7 +27,7 @@ dependencies = [
 # Optional runtime accelerator: gates negative cache lookups behind a
 # bloom filter. The library degrades gracefully without it (see cache.py).
 # Distribution name is `bouquet-bloom`; the import name is `bouquet`.
-bloom = ["bouquet-bloom"]
+bloom = ["bouquet-bloom>=0.1.0"]
 # `dev` deliberately omits bouquet — it's an optional accelerator, not a
 # dev requirement, and the suite skips bloom-only tests when it's absent.
 # To exercise the bloom path locally: `uv sync --extra dev --extra bloom`.
@@ -53,9 +53,10 @@ package = false
 # Supply-chain defense: only install package versions published at least
 # 1 week ago so freshly-uploaded malicious releases have time to be caught.
 exclude-newer = "1 week"
-
-[tool.uv.sources]
-bouquet-bloom = { path = "../bouquet/bouquet-py" }
+# Reviewed exception for our own package: bouquet-bloom 0.1.0 was published
+# 2026-11-21, inside the cooldown window. Remove this line once it is a week
+# old (after 2026-11-28); the global cooldown then covers it.
+exclude-newer-package = { bouquet-bloom = "2026-11-22T00:00:00Z" }
 
 # ── ruff ───────────────────────────────────────────────────────────────────────
 [tool.ruff]

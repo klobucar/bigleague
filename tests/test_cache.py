@@ -6,12 +6,12 @@ from unittest.mock import patch
 
 import polars as pl
 import pytest
-from bigleague.cache import ClassicalFilter, StatcastCache
+from bigleague.cache import AtomicFilter, StatcastCache
 
 # bouquet is an optional extra; bloom-specific behaviour can't be exercised
 # (or even asserted on) when it isn't installed.
 requires_bloom = pytest.mark.skipif(
-    ClassicalFilter is None, reason="bouquet not installed (install the `bloom` extra)"
+    AtomicFilter is None, reason="bouquet not installed (install the `bloom` extra)"
 )
 
 
@@ -98,7 +98,7 @@ def test_clear_removes_files_and_resets_bloom(tmp_path: Path) -> None:
     c.set("b", pl.DataFrame({"x": [2]}))
     c.clear()
     assert not list(tmp_path.glob("*.parquet"))
-    if ClassicalFilter is not None:
+    if AtomicFilter is not None:
         assert c.bloom is not None
         assert b"a" not in c.bloom
         assert b"b" not in c.bloom
@@ -187,7 +187,7 @@ def test_cache_works_without_bloom(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     # instance, shadowing the submodule — reach it via sys.modules.
     import sys
 
-    monkeypatch.setattr(sys.modules["bigleague.cache"], "ClassicalFilter", None)
+    monkeypatch.setattr(sys.modules["bigleague.cache"], "AtomicFilter", None)
     c = StatcastCache(tmp_path)
     assert c.bloom is None
     df = pl.DataFrame({"a": [1, 2, 3]})
@@ -196,3 +196,22 @@ def test_cache_works_without_bloom(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert got is not None
     assert got.equals(df)
     assert c.get("missing") is None
+
+
+@requires_bloom
+async def test_bloom_cache_is_usable_from_worker_threads(tmp_path: Path) -> None:
+    """Regression: the savant fetch path calls cache.get/set via
+    asyncio.to_thread, on a different thread than the one that built the
+    cache. A thread-pinned bloom filter (ClassicalFilter) panics there with
+    "unsendable, but sent to another thread"; AtomicFilter must not."""
+    import asyncio
+
+    c = StatcastCache(tmp_path)  # constructed on the main thread
+    df = pl.DataFrame({"a": [1]})
+    await asyncio.to_thread(c.set, "k", df)
+    got = await asyncio.to_thread(c.get, "k")
+    assert got is not None
+    assert got.equals(df)
+    assert await asyncio.to_thread(c.get, "missing") is None
+    await asyncio.to_thread(c.clear)
+    assert await asyncio.to_thread(c.get, "k") is None

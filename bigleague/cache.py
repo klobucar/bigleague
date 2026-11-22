@@ -23,10 +23,15 @@ from pathlib import Path
 import polars as pl
 
 try:
-    # bouquet is a Rust extension with no type stubs; ty can't see its exports.
-    from bouquet import ClassicalFilter  # ty: ignore[unresolved-import]
+    # Distribution `bouquet-bloom`, import name `bouquet`. AtomicFilter (not
+    # ClassicalFilter) because the module-level `cache` singleton is read and
+    # written from worker threads (asyncio.to_thread): ClassicalFilter and
+    # BlockedFilter are pinned to the thread that created them and panic when
+    # another thread touches them. AtomicFilter is thread-safe and has the
+    # same insert / `in` surface.
+    from bouquet import AtomicFilter  # ty: ignore[import-not-found]
 except ImportError:
-    ClassicalFilter = None  # type: ignore[assignment,misc]
+    AtomicFilter = None  # type: ignore[assignment,misc]
 
 _DEFAULT_CACHE_DIR = Path("~/.bigleague/cache").expanduser()
 
@@ -51,8 +56,8 @@ class StatcastCache:
 
     def __init__(self, cache_dir: Path | None = None) -> None:
         self.cache_dir = cache_dir or resolve_cache_dir()
-        self.bloom: ClassicalFilter | None = (
-            ClassicalFilter.from_false_pos(0.01, 10_000) if ClassicalFilter else None
+        self.bloom: AtomicFilter | None = (
+            AtomicFilter.from_false_pos(0.01, 10_000) if AtomicFilter else None
         )
         self._bloom_seeded = False
 
@@ -74,8 +79,8 @@ class StatcastCache:
         use. No parquet reads — contents never matter for membership."""
         if self.bloom is None or self._bloom_seeded:
             return
-        for f in self.cache_dir.glob("*.parquet"):
-            self.bloom.insert(f.stem)
+        # One batched call (releases the GIL) rather than a call per file.
+        self.bloom.insert_many([f.stem for f in self.cache_dir.glob("*.parquet")])
         self._bloom_seeded = True
 
     def get(self, key: str) -> pl.DataFrame | None:
@@ -119,8 +124,8 @@ class StatcastCache:
     def clear(self) -> None:
         for f in self.cache_dir.glob("*.parquet"):
             f.unlink()
-        if self.bloom is not None and ClassicalFilter is not None:
-            self.bloom = ClassicalFilter.from_false_pos(0.01, 10_000)
+        if self.bloom is not None:
+            self.bloom.clear()
 
     def size(self) -> int:
         """Total bytes used by the on-disk parquet cache."""

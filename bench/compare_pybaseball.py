@@ -58,7 +58,7 @@ def worker_bigleague(scenario: str, player: int, year: int) -> dict:
 
 
 def worker_pybaseball(scenario: str, player: int, year: int) -> dict:
-    from pybaseball import statcast_batter  # ty: ignore[unresolved-import]
+    from pybaseball import statcast_batter  # ty: ignore[import-not-found]
 
     if scenario in ("month_cold", "month_warm"):
         df = statcast_batter(f"{year}-04-01", f"{year}-04-30", player)
@@ -74,7 +74,7 @@ def worker_pandas_pyarrow(scenario: str, player: int, year: int) -> dict:
     import io
 
     import httpx
-    import pandas as pd  # ty: ignore[unresolved-import]
+    import pandas as pd  # ty: ignore[import-not-found]
 
     def fetch(start: str, end: str):
         # Same endpoint as bigleague (savant.py:25-26) but un-chunked like
