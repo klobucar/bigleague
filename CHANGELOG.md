@@ -6,6 +6,8 @@ versions may break.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-22
+
 ### Fixed
 
 - **`spray_chart` and `stadium_outline` drew every park as the same generic
@@ -22,6 +24,15 @@ versions may break.
   It is Ben Dilday's GeomMLBStadiums data (MIT), as redistributed in
   pybaseball, bundled as a 96 KB file with its license notice. An unknown
   stadium key draws the generic park.
+
+### Changed
+
+- The `bloom` extra now requires `bouquet-bloom>=0.2.0` (was `>=0.1.0`).
+  bigleague uses only `AtomicFilter.from_false_pos`, `insert`, `insert_many`,
+  `in` and `clear`, which 0.2.0 keeps unchanged, so there are no code changes.
+  0.2.0 adds batch, union and serialization methods and makes inserts and
+  lookups faster. A cache lookup spends about 45 ns in the filter and about
+  33 µs overall, so the speedup is not visible in bigleague.
 
 ## [0.1.1] — 2026-11-21
 
