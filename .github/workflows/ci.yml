@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege by default. No job here writes to the repo; a job that
+# needs more should ask for it locally rather than widening this.
+permissions:
+  contents: read
+
+# Superseded pushes to the same ref stop burning runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: ruff and ty
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.12"
+          enable-cache: false
+      - run: uv sync --locked --extra dev
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ty check
+
+  test:
+    name: pytest (py${{ matrix.python }}, ${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+        # `bloom` installs the optional bouquet-bloom accelerator. Both
+        # profiles must pass: the bloom tests skip themselves when it is
+        # absent, so only the `bloom` profile exercises that code path.
+        profile: [default, bloom]
+        include:
+          - profile: default
+            extras: ""
+          - profile: bloom
+            extras: "--extra bloom"
+    env:
+      EXTRAS: ${{ matrix.extras }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: false
+      # `uv sync` is exact: it removes bouquet-bloom from the default profile
+      # even if an earlier step installed it.
+      - run: |
+          # shellcheck disable=SC2086  # EXTRAS is intentionally word-split
+          uv sync --locked --extra dev $EXTRAS
+      - run: uv run --no-sync pytest
+
+  build:
+    name: build and check distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.12"
+          enable-cache: false
+      - run: uv build --out-dir dist
+      - run: uvx --from twine twine check dist/*
+
+  # Static analysis of the workflows themselves: catches unpinned actions,
+  # credential persistence, cache poisoning, and expression injection. The
+  # release workflow publishes immutable artifacts, so a regression here is
+  # not recoverable after the fact.
+  zizmor:
+    name: zizmor (workflow audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: false
+      - run: uvx zizmor --config .github/zizmor.yml .github/workflows/

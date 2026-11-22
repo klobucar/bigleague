@@ -1,0 +1,11 @@
+# zizmor configuration — https://docs.zizmor.sh
+#
+# Run locally with:  uvx zizmor --config .github/zizmor.yml .github/workflows/
+
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Every action must be pinned to a full commit SHA, with the
+        # human-readable tag in a trailing comment. Dependabot updates both.
+        "*": hash-pin
