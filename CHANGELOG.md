@@ -6,6 +6,23 @@ versions may break.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`spray_chart` and `stadium_outline` drew every park as the same generic
+  shape.** They drew a smooth arc scaled to a park's three wall distances (LF,
+  CF, RF), so Yankee Stadium, Fenway and Oracle Park all looked alike. They now
+  draw each park's real outline: stands, wall, foul ground, infield dirt and
+  grass, and foul lines. Batted balls are plotted at their raw `hc_x` / `hc_y`
+  coordinates on the same grid, instead of being rescaled to feet. The LF, CF
+  and RF distance labels are kept.
+
+### Added
+
+- `bigleague.stadium_paths`: the park outline data (`paths`, `known_parks`).
+  It is Ben Dilday's GeomMLBStadiums data (MIT), as redistributed in
+  pybaseball, bundled as a 96 KB file with its license notice. An unknown
+  stadium key draws the generic park.
+
 ## [0.1.1] — 2026-11-21
 
 ### Fixed

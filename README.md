@@ -46,7 +46,8 @@ asyncio.run(main())
 
 The strike-zone plot covers April 2025. The hot zones and spray chart use
 Ohtani's season data. Passing `stadium_key="dodgers"` to `spray_chart` selects
-batted balls at Dodger Stadium.
+batted balls at Dodger Stadium and draws that park's real outline, so each of
+the 30 parks has its own shape.
 
 ## Fetching data
 
@@ -188,3 +189,8 @@ and writes the PNGs to `docs/img/`.
 
 [MIT](LICENSE). bigleague is an independent project. Check the data
 providers' terms before commercial use.
+
+The ballpark outlines used by `spray_chart` and `stadium_outline` are Ben
+Dilday's [GeomMLBStadiums](https://github.com/bdilday/GeomMLBStadiums) data
+(MIT), as redistributed in [pybaseball](https://github.com/jldbc/pybaseball).
+Its license notice is in `bigleague/data/LICENSE-stadium-paths`.
