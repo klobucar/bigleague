@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12", "3.13", "3.14"]
+        python: ["3.12", "3.13", "3.14", "3.15"]
         # `bloom` installs the optional bouquet-bloom accelerator. Both
         # profiles must pass: the bloom tests skip themselves when it is
         # absent, so only the `bloom` profile exercises that code path.
