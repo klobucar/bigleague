@@ -4,35 +4,35 @@ Every renderer:
   1. Selects only the columns it needs (huge perf win on Statcast frames).
   2. Validates non-empty input.
   3. Returns PNG bytes from an in-memory BytesIO buffer.
-  4. Calls `plt.close(fig)` and `gc.collect()` in a `finally` block —
-     mandatory. matplotlib holds a C-side bitmap until close().
+  4. Calls `gc.collect()` in a `finally` block — mandatory. A figure is a
+     web of reference cycles that holds a C-side bitmap, so without the
+     collection each render's memory lingers until the cyclic GC happens to
+     run.
 
-`gc.collect()` is kept from an earlier pandas-based implementation, where
-DataFrames in matplotlib reference cycles caused ~10 MiB RSS leaks
-per chart. Polars frames are much smaller in memory; the explicit GC
-may be removable. TODO: benchmark on Fly.io and drop if it doesn't move
-the needle.
+matplotlib and numpy are imported on the first render, not at
+`import bigleague`: together they cost about 40 MB of resident memory, which a
+process that never plots (lookups, standings, leaderboards) shouldn't pay.
+Figures are built directly on `matplotlib.figure.Figure` rather than through
+pyplot, so there is no global figure registry to leak from and no backend to
+select: saving a PNG uses the Agg renderer on its own, and the caller's
+matplotlib backend is left alone.
 """
 
 from __future__ import annotations
 
 import gc
 from io import BytesIO
+from typing import TYPE_CHECKING
 
-import matplotlib
-
-matplotlib.use("Agg")  # headless — must run before pyplot import
-
-import matplotlib.axes
-import matplotlib.colors as mcolors
-import matplotlib.figure
-import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
-import numpy as np
 import polars as pl
 
 from bigleague.stadiums import LEGACY_TEAM_CODES, STADIUM_DATA, STADIUM_TO_TEAM_CODE
 from bigleague.stats import hot_zones_ab_counts, hot_zones_grid
+
+if TYPE_CHECKING:  # annotations only; the real imports happen at first render
+    import matplotlib.axes
+    import matplotlib.figure
+    import numpy as np
 
 _PITCH_COLORS: dict[str, str] = {
     "FF": "red",
@@ -65,8 +65,20 @@ def _save_png(fig: matplotlib.figure.Figure, dpi: int = 150) -> bytes:
     return buf.read()
 
 
+def _new_fig(
+    figsize: tuple[float, float], dpi: int | None = None
+) -> tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]:
+    """A figure with one axes, built without pyplot (and imported on demand)."""
+    from matplotlib.figure import Figure
+
+    fig = Figure(figsize=figsize) if dpi is None else Figure(figsize=figsize, dpi=dpi)
+    return fig, fig.add_subplot()
+
+
 def _draw_strike_zone(ax: matplotlib.axes.Axes) -> None:
     """Outer rectangle + 3x3 grid lines for the official MLB strike zone."""
+    import matplotlib.patches as mpatches
+
     rect = mpatches.Rectangle(
         (_ZONE_X_MIN, _ZONE_Z_MIN),
         width=_ZONE_X_MAX - _ZONE_X_MIN,
@@ -105,7 +117,7 @@ def _zone_scatter(df: pl.DataFrame, title: str, colorby: str) -> bytes:
     if needed.is_empty():
         raise ValueError(f"No plottable pitches after filtering on {colorby!r}.")
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = _new_fig((8, 8))
     try:
         # One scatter artist per color group, not per pitch — league-wide
         # frames would otherwise create tens of thousands of artists.
@@ -137,9 +149,7 @@ def _zone_scatter(df: pl.DataFrame, title: str, colorby: str) -> bytes:
         ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=9)
         return _save_png(fig)
     finally:
-        plt.close(fig)
-        # TODO: benchmark whether gc.collect() is still needed with polars
-        gc.collect()
+        gc.collect()  # load-bearing: see the module docstring
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +188,9 @@ def hot_zones(df: pl.DataFrame, title: str) -> bytes:
     if not any(hot_zones_ab_counts(df).values()):
         raise ValueError("No at-bats recorded in the strike zone for this dataset.")
 
+    import matplotlib.colors as mcolors
+    import numpy as np
+
     grid = np.array(
         [
             [grid_dict[1], grid_dict[2], grid_dict[3]],
@@ -186,7 +199,7 @@ def hot_zones(df: pl.DataFrame, title: str) -> bytes:
         ]
     )
 
-    fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
+    fig, ax = _new_fig((6, 6), dpi=100)
     try:
         norm = mcolors.TwoSlopeNorm(vmin=0.100, vcenter=0.250, vmax=0.400)
         im = ax.imshow(grid, cmap="RdYlBu_r", norm=norm, interpolation="nearest")
@@ -217,9 +230,7 @@ def hot_zones(df: pl.DataFrame, title: str) -> bytes:
         cbar.ax.set_ylabel("Batting Average", rotation=-90, va="bottom")
         return _save_png(fig)
     finally:
-        plt.close(fig)
-        # TODO: benchmark whether gc.collect() is still needed with polars
-        gc.collect()
+        gc.collect()  # load-bearing: see the module docstring
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +245,8 @@ def _outfield_arc(lf: float, cf: float, rf: float, n: int = 80) -> np.ndarray:
     is straight CF). Radius interpolates linearly between LF->CF on
     the left half and CF->RF on the right half.
     """
+    import numpy as np
+
     angles = np.linspace(-np.pi / 4, np.pi / 4, n)
     radii = np.empty_like(angles)
     for i, t in enumerate(angles):
@@ -256,6 +269,9 @@ def _draw_field(
     label: bool = True,
 ) -> None:
     """Draw a ballpark: foul territory, fair grass, infield diamond, walls."""
+    import matplotlib.patches as mpatches
+    import numpy as np
+
     # Foul territory background
     ax.set_facecolor("lightgray")
 
@@ -388,7 +404,7 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
     color_expr = _hit_color_expr() if "events" in data.columns else pl.lit("lightcoral")
     data = data.with_columns(color_expr.alias("_color"))
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = _new_fig((8, 8))
     try:
         _draw_field(ax, lf, cf, rf)
 
@@ -410,6 +426,8 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
                 zorder=4,
             )
 
+        import matplotlib.patches as mpatches
+
         legend_elements = [
             mpatches.Patch(color="gold", label="HR"),
             mpatches.Patch(color="green", label="Hit"),
@@ -419,9 +437,7 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
         ax.set_title(title, fontsize=12, fontweight="bold")
         return _save_png(fig)
     finally:
-        plt.close(fig)
-        # TODO: benchmark whether gc.collect() is still needed with polars
-        gc.collect()
+        gc.collect()  # load-bearing: see the module docstring
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +452,7 @@ def stadium_outline(stadium_key: str, title: str = "") -> bytes:
         raise ValueError(f"Unknown stadium key: {stadium_key!r}")
 
     lf, cf, rf = float(meta["lf"]), float(meta["cf"]), float(meta["rf"])
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = _new_fig((8, 8))
     try:
         _draw_field(ax, lf, cf, rf)
         if title:
@@ -445,6 +461,4 @@ def stadium_outline(stadium_key: str, title: str = "") -> bytes:
             ax.set_title(f"{meta['name']} — {meta['location']}", fontsize=12, fontweight="bold")
         return _save_png(fig)
     finally:
-        plt.close(fig)
-        # TODO: benchmark whether gc.collect() is still needed with polars
-        gc.collect()
+        gc.collect()  # load-bearing: see the module docstring
