@@ -10,7 +10,7 @@ packages = ["bigleague"]
 
 # PEP 561 marker: the package is annotated, so type checkers should use it.
 [tool.setuptools.package-data]
-bigleague = ["py.typed"]
+bigleague = ["py.typed", "data/*"]
 
 [project]
 name = "bigleague"
@@ -19,6 +19,9 @@ description = "Async polars-native baseball data and plotting library"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
+# The park outline data (bigleague/data) is MIT-licensed work by Ben Dilday;
+# ship its notice alongside ours.
+license-files = ["LICENSE", "bigleague/data/LICENSE-stadium-paths"]
 authors = [{ name = "Jonathon Klobucar" }]
 keywords = [
     "baseball",

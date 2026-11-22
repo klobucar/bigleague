@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import gc
 from io import BytesIO
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
@@ -32,7 +32,7 @@ from bigleague.stats import hot_zones_ab_counts, hot_zones_grid
 if TYPE_CHECKING:  # annotations only; the real imports happen at first render
     import matplotlib.axes
     import matplotlib.figure
-    import numpy as np
+    import matplotlib.patches
 
 _PITCH_COLORS: dict[str, str] = {
     "FF": "red",
@@ -234,133 +234,149 @@ def hot_zones(df: pl.DataFrame, title: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Stadium drawing primitives (also used by spray_chart)
+# Stadium drawing (also used by spray_chart)
 # ---------------------------------------------------------------------------
 
+# Palette for the park diagram.
+_STANDS = "#b5b5b5"
+_FOUL_GROUND = "#4a7a4a"
+_FAIR_GRASS = "darkgreen"
+_WALL = "#222222"
+_WARNING_TRACK = "sienna"
+_DIRT = "#d2b48c"
 
-def _outfield_arc(lf: float, cf: float, rf: float, n: int = 80) -> np.ndarray:
-    """Smooth arc from left-foul corner through CF to right-foul corner.
 
-    Polar interpolation: angle theta runs -45° -> 0° -> +45° (where 0
-    is straight CF). Radius interpolates linearly between LF->CF on
-    the left half and CF->RF on the right half.
+def _draw_stadium(ax: matplotlib.axes.Axes, stadium_key: str, label: bool = True) -> None:
+    """Draw a ballpark from its real outline, in Savant's hc_x / hc_y grid.
+
+    The axes use that grid directly (y grows toward home plate, so the y axis
+    is inverted), which is what lets batted balls be scattered on it as they
+    come from Statcast. An unknown key draws the generic park.
     """
-    import numpy as np
+    from bigleague import stadium_paths
 
-    angles = np.linspace(-np.pi / 4, np.pi / 4, n)
-    radii = np.empty_like(angles)
-    for i, t in enumerate(angles):
-        if t < 0:
-            frac = (t - (-np.pi / 4)) / (np.pi / 4)  # 0 at LF, 1 at CF
-            radii[i] = lf + frac * (cf - lf)
-        else:
-            frac = t / (np.pi / 4)  # 0 at CF, 1 at RF
-            radii[i] = cf + frac * (rf - cf)
-    xs = radii * np.sin(angles)
-    ys = radii * np.cos(angles)
-    return np.column_stack([xs, ys])
+    key = stadium_key if stadium_key in stadium_paths.known_parks() else "generic"
+    seg = stadium_paths.paths(key)
 
-
-def _draw_field(
-    ax: matplotlib.axes.Axes,
-    lf: float,
-    cf: float,
-    rf: float,
-    label: bool = True,
-) -> None:
-    """Draw a ballpark: foul territory, fair grass, infield diamond, walls."""
-    import matplotlib.patches as mpatches
-    import numpy as np
-
-    # Foul territory background
     ax.set_facecolor("lightgray")
+    if "outfield_inner" in seg:
+        _draw_real_park(ax, key, seg, label)
+    else:
+        _draw_generic_park(ax, seg)
 
-    # Outfield wall + foul lines polygon (closed)
-    arc = _outfield_arc(lf, cf, rf)
-    fair = np.vstack([[0.0, 0.0], arc, [0.0, 0.0]])
-    field_patch = mpatches.Polygon(
-        fair,
-        closed=True,
-        facecolor="darkgreen",
-        edgecolor="black",
-        linewidth=1.2,
-        zorder=1,
-    )
-    ax.add_patch(field_patch)
-
-    # Warning track: shrink arc by ~15ft toward home
-    track_inner = arc * (1 - 15.0 / np.linalg.norm(arc, axis=1, keepdims=True))
-    track_poly = np.vstack([arc, track_inner[::-1]])
-    track_patch = mpatches.Polygon(
-        track_poly,
-        closed=True,
-        facecolor="sienna",
-        edgecolor="none",
-        alpha=0.7,
-        zorder=2,
-    )
-    ax.add_patch(track_patch)
-
-    # Foul lines
-    ax.plot([0, arc[0, 0]], [0, arc[0, 1]], color="white", lw=1.2, zorder=3)
-    ax.plot([0, arc[-1, 0]], [0, arc[-1, 1]], color="white", lw=1.2, zorder=3)
-
-    # Infield diamond (90 ft bases) — square rotated 45°
-    base = 90.0
-    diamond = np.array(
-        [
-            [0.0, 0.0],
-            [-base * np.sin(np.pi / 4), base * np.cos(np.pi / 4)],
-            [0.0, base * np.sqrt(2)],
-            [base * np.sin(np.pi / 4), base * np.cos(np.pi / 4)],
-        ]
-    )
-    ax.add_patch(
-        mpatches.Polygon(
-            diamond,
-            closed=True,
-            facecolor="tan",
-            edgecolor="white",
-            linewidth=1.0,
-            zorder=3,
-        )
-    )
-
-    if label:
-        ax.text(
-            arc[0, 0] - 5, arc[0, 1] + 8, f"LF {int(lf)}'", color="white", fontsize=9, ha="right"
-        )
-        ax.text(0, cf + 8, f"CF {int(cf)}'", color="white", fontsize=9, ha="center")
-        ax.text(
-            arc[-1, 0] + 5, arc[-1, 1] + 8, f"RF {int(rf)}'", color="white", fontsize=9, ha="left"
-        )
-
-    ax.set_xlim(-400, 400)
-    ax.set_ylim(0, 450)
+    outer_x, outer_y = seg["outfield_outer"]
+    pad = 5.0
+    ax.set_xlim(min(outer_x) - pad, max(outer_x) + pad)
+    ax.set_ylim(max(outer_y) + pad, min(outer_y) - pad)  # y grows toward home plate
     ax.set_aspect("equal")
     ax.set_xticks([])
     ax.set_yticks([])
 
 
+def _add_poly(
+    ax: matplotlib.axes.Axes, path: tuple[list[float], list[float]], **kwargs: Any
+) -> matplotlib.patches.Polygon:
+    import matplotlib.patches as mpatches
+
+    patch = mpatches.Polygon(list(zip(*path, strict=True)), closed=True, **kwargs)
+    ax.add_patch(patch)
+    return patch
+
+
+def _draw_real_park(
+    ax: matplotlib.axes.Axes,
+    key: str,
+    seg: dict[str, tuple[list[float], list[float]]],
+    label: bool,
+) -> None:
+    """One of the 30 parks: stands, wall, foul and fair ground, dirt and grass."""
+    import matplotlib.patches as mpatches
+
+    _add_poly(
+        ax, seg["outfield_outer"], facecolor=_STANDS, edgecolor="#777777", linewidth=0.8, zorder=0
+    )
+
+    # The foul-line path is a loop that starts and ends at home plate, out to
+    # each pole and back; the poles are its leftmost and rightmost points.
+    foul_pts = list(zip(*seg["foul_lines"], strict=True))
+    home_x, home_y = max(foul_pts, key=lambda pt: pt[1])
+    lx, ly = min(foul_pts)
+    rx, ry = max(foul_pts)
+
+    # Everything inside the wall, foul ground included, then the fair-territory
+    # wedge (home plate through each foul pole, extended) over it in a brighter
+    # green, so foul ground reads as foul ground.
+    reach = 10.0
+    wedge = mpatches.Polygon(
+        [
+            (home_x, home_y),
+            (home_x + reach * (lx - home_x), home_y + reach * (ly - home_y)),
+            (home_x + reach * (rx - home_x), home_y + reach * (ry - home_y)),
+        ],
+        closed=True,
+        transform=ax.transData,
+    )
+    wall = _add_poly(ax, seg["outfield_inner"], facecolor=_FOUL_GROUND, edgecolor="none", zorder=1)
+    fair = _add_poly(ax, seg["outfield_inner"], facecolor=_FAIR_GRASS, edgecolor="none", zorder=1.1)
+    fair.set_clip_path(wedge)
+
+    # Warning track: a wide stroke along the wall, clipped to the inside of it.
+    xs, ys = seg["outfield_inner"]
+    (track,) = ax.plot(
+        xs, ys, color=_WARNING_TRACK, lw=9, alpha=0.7, zorder=1.2, solid_capstyle="butt"
+    )
+    track.set_clip_path(wall)
+    ax.plot(xs + xs[:1], ys + ys[:1], color=_WALL, lw=2, zorder=1.3)
+
+    _add_poly(ax, seg["infield_outer"], facecolor=_DIRT, edgecolor="none", zorder=2)
+    _add_poly(ax, seg["infield_inner"], facecolor=_FAIR_GRASS, edgecolor="none", zorder=2.1)
+    ax.plot([lx, home_x, rx], [ly, home_y, ry], color="white", lw=1.4, zorder=2.5)
+    _add_poly(
+        ax, seg["home_plate"], facecolor="white", edgecolor="#555555", linewidth=0.6, zorder=2.6
+    )
+
+    if label:
+        from bigleague.stadiums import STADIUM_DATA
+
+        meta = STADIUM_DATA[key]
+        # CF sits at the wall's farthest point from home plate.
+        cx, cy = min(zip(xs, ys, strict=True), key=lambda pt: pt[1])
+        style: dict[str, Any] = {"color": "white", "fontsize": 9, "zorder": 2.7}
+        ax.text(lx + 4, ly - 4, f"LF {int(meta['lf'])}'", ha="left", va="bottom", **style)
+        ax.text(cx, cy + 5, f"CF {int(meta['cf'])}'", ha="center", va="top", **style)
+        ax.text(rx - 4, ry - 4, f"RF {int(meta['rf'])}'", ha="right", va="bottom", **style)
+
+
+def _draw_generic_park(
+    ax: matplotlib.axes.Axes, seg: dict[str, tuple[list[float], list[float]]]
+) -> None:
+    """The generic park: a plain fan-shaped field, no stands or foul ground."""
+    xs, ys = seg["outfield_outer"]
+    pts = list(zip(xs, ys, strict=True))
+    home_x, home_y = max(pts, key=lambda pt: pt[1])
+    lx, ly = min(pts)
+    rx, ry = max(pts)
+
+    wall = _add_poly(ax, seg["outfield_outer"], facecolor=_FAIR_GRASS, edgecolor="none", zorder=1)
+    # The wall is the arc beyond the poles; the rest of the path is the foul lines.
+    arc = [pt for pt in pts if pt[1] <= max(ly, ry) + 0.5]
+    arc_x, arc_y = zip(*arc, strict=True)
+    (track,) = ax.plot(
+        arc_x, arc_y, color=_WARNING_TRACK, lw=9, alpha=0.7, zorder=1.2, solid_capstyle="butt"
+    )
+    track.set_clip_path(wall)
+    ax.plot(arc_x, arc_y, color=_WALL, lw=2, zorder=1.3)
+
+    _add_poly(ax, seg["infield_outer"], facecolor=_DIRT, edgecolor="none", zorder=2)
+    ax.plot([lx, home_x, rx], [ly, home_y, ry], color="white", lw=1.4, zorder=2.5)
+    ax.plot(
+        [home_x], [home_y], marker="p", color="white", markeredgecolor="#555555", ms=7, zorder=2.6
+    )
+
+
 # ---------------------------------------------------------------------------
 # Spray chart
 # ---------------------------------------------------------------------------
-
-
-# Savant hc_x/hc_y come in a ~0-250 pixel grid with home plate at
-# (125.42, 198.27); the field is drawn in feet, so scale by ~2.495 ft/px.
-_SAVANT_PX_TO_FT = 2.495
-
-
-def _savant_to_feet(
-    hc_x: float | np.ndarray, hc_y: float | np.ndarray
-) -> tuple[float | np.ndarray, float | np.ndarray]:
-    """Convert Savant pixel-grid hit coordinates to feet from home plate.
-
-    Pure arithmetic, so it works elementwise on numpy arrays as well as
-    scalars.
-    """
-    return (hc_x - 125.42) * _SAVANT_PX_TO_FT, (198.27 - hc_y) * _SAVANT_PX_TO_FT
 
 
 def _hit_color_expr() -> pl.Expr:
@@ -379,8 +395,9 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
     """Batted-ball scatter overlaid on a stadium outline.
 
     Filters to in-play events with hc_x/hc_y coords. If a non-generic
-    stadium is selected, also filters to home games at that park.
-    Coordinate translation lifts Savant's pixel grid to feet from home.
+    stadium is selected, also filters to home games at that park. The park is
+    drawn from its real outline, in the same pixel grid Savant reports hit
+    coordinates in, so the balls are plotted exactly as given.
     """
     needed_cols = [c for c in ("type", "hc_x", "hc_y", "events", "home_team") if c in df.columns]
     data = df.select(needed_cols)
@@ -398,26 +415,19 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
             raise ValueError(f"No batted-ball data at {stadium_key} park (team_code={team_code}).")
         data = filtered
 
-    meta = STADIUM_DATA.get(stadium_key, STADIUM_DATA["generic"])
-    lf, cf, rf = float(meta["lf"]), float(meta["cf"]), float(meta["rf"])
-
     color_expr = _hit_color_expr() if "events" in data.columns else pl.lit("lightcoral")
     data = data.with_columns(color_expr.alias("_color"))
 
     fig, ax = _new_fig((8, 8))
     try:
-        _draw_field(ax, lf, cf, rf)
+        _draw_stadium(ax, stadium_key)
 
         # One scatter artist per color bucket, not per batted ball —
         # league-wide frames would otherwise create one artist per pitch.
         for (color,), group in data.group_by("_color", maintain_order=True):
-            field_x, field_y = _savant_to_feet(
+            ax.scatter(
                 group["hc_x"].cast(pl.Float64).to_numpy(),
                 group["hc_y"].cast(pl.Float64).to_numpy(),
-            )
-            ax.scatter(
-                field_x,
-                field_y,
                 c=str(color),
                 s=30,
                 alpha=0.7,
@@ -446,15 +456,14 @@ def spray_chart(df: pl.DataFrame, title: str, stadium_key: str = "generic") -> b
 
 
 def stadium_outline(stadium_key: str, title: str = "") -> bytes:
-    """Standalone ballpark outline using STADIUM_DATA dimensions."""
+    """Standalone ballpark diagram, drawn from the park's real outline."""
     meta = STADIUM_DATA.get(stadium_key)
     if meta is None:
         raise ValueError(f"Unknown stadium key: {stadium_key!r}")
 
-    lf, cf, rf = float(meta["lf"]), float(meta["cf"]), float(meta["rf"])
     fig, ax = _new_fig((8, 8))
     try:
-        _draw_field(ax, lf, cf, rf)
+        _draw_stadium(ax, stadium_key)
         if title:
             ax.set_title(title, fontsize=12, fontweight="bold")
         else:
