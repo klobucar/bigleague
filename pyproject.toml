@@ -14,7 +14,7 @@ bigleague = ["py.typed", "data/*"]
 
 [project]
 name = "bigleague"
-version = "0.1.1"
+version = "0.2.0"
 description = "Async polars-native baseball data and plotting library"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -68,7 +68,7 @@ Changelog = "https://github.com/klobucar/bigleague/blob/main/CHANGELOG.md"
 # Optional runtime accelerator: gates negative cache lookups behind a
 # bloom filter. The library degrades gracefully without it (see cache.py).
 # Distribution name is `bouquet-bloom`; the import name is `bouquet`.
-bloom = ["bouquet-bloom>=0.1.0"]
+bloom = ["bouquet-bloom>=0.2.0"]
 # `dev` deliberately omits bouquet — it's an optional accelerator, not a
 # dev requirement, and the suite skips bloom-only tests when it's absent.
 # To exercise the bloom path locally: `uv sync --extra dev --extra bloom`.
@@ -94,7 +94,7 @@ package = false
 # Supply-chain defense: only install package versions published at least
 # 1 week ago so freshly-uploaded malicious releases have time to be caught.
 exclude-newer = "1 week"
-# Reviewed exception for our own package: bouquet-bloom 0.1.1 was published
+# Reviewed exception for our own package: bouquet-bloom 0.2.0 was published
 # 2026-11-22, inside the cooldown window. Remove this line once it is a week
 # old (after 2026-11-29); the global cooldown then covers it.
 exclude-newer-package = { bouquet-bloom = "2026-11-23T00:00:00Z" }
