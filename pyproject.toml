@@ -91,10 +91,10 @@ package = false
 # Supply-chain defense: only install package versions published at least
 # 1 week ago so freshly-uploaded malicious releases have time to be caught.
 exclude-newer = "1 week"
-# Reviewed exception for our own package: bouquet-bloom 0.1.0 was published
-# 2026-11-21, inside the cooldown window. Remove this line once it is a week
-# old (after 2026-11-28); the global cooldown then covers it.
-exclude-newer-package = { bouquet-bloom = "2026-11-22T00:00:00Z" }
+# Reviewed exception for our own package: bouquet-bloom 0.1.1 was published
+# 2026-11-22, inside the cooldown window. Remove this line once it is a week
+# old (after 2026-11-29); the global cooldown then covers it.
+exclude-newer-package = { bouquet-bloom = "2026-11-23T00:00:00Z" }
 
 # ── ruff ───────────────────────────────────────────────────────────────────────
 [tool.ruff]
