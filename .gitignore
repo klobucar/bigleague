@@ -147,3 +147,4 @@ Desktop.ini
 *.tmp
 scratch/
 notebooks/scratch/
+/minimal.toml
