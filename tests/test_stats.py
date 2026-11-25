@@ -266,3 +266,167 @@ def test_aggregate_career_sums_batter_war_but_weights_rates() -> None:
     assert stats_block["WAR"] == "6.000"
     # Rate stats stay PA-weighted: (0.3*600 + 0.2*200) / 800 = 0.275
     assert stats_block["AVG"] == "0.275"
+
+
+# ---------------------------------------------------------------------------
+# Single-pass counting: must match a naive one-filter-per-stat reference.
+# ---------------------------------------------------------------------------
+
+_ALL_EVENTS: list[str | None] = [
+    *sorted(stats.AB_EVENTS),
+    "walk",
+    "hit_by_pitch",
+    "sac_fly",
+    None,
+    None,
+    None,
+]
+
+
+def _random_events_df(seed: int, n: int = 2_000) -> pl.DataFrame:
+    import random
+
+    rng = random.Random(seed)
+    return _make_batter_df(
+        [rng.choice(_ALL_EVENTS) for _ in range(n)],
+        [rng.randint(1, 4) for _ in range(n)],
+    )
+
+
+def _naive(df: pl.DataFrame, pred: pl.Expr) -> int:
+    return df.filter(pred).height
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_hot_cold_batter_matches_naive_reference(seed: int) -> None:
+    df = _random_events_df(seed)
+    ev = pl.col("events")
+    ab = _naive(df, ev.is_in(stats.AB_EVENTS))
+    h = _naive(df, ev.is_in(stats.HIT_EVENTS))
+    bb = _naive(df, ev == "walk")
+    tb = sum(
+        mult * _naive(df, ev == name)
+        for mult, name in ((1, "single"), (2, "double"), (3, "triple"), (4, "home_run"))
+    )
+    got = stats.hot_cold_batter(df)
+    assert (got["ab"], got["h"], got["bb"], got["pa"]) == (ab, h, bb, ab + bb)
+    assert got["slg"] == round(tb / ab, 3)
+    assert got["obp"] == round((h + bb) / (ab + bb), 3)
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_hot_cold_pitcher_matches_naive_reference(seed: int) -> None:
+    df = _random_events_df(seed)
+    ev = pl.col("events")
+    assert stats.hot_cold_pitcher(df) == {
+        "pitches": df.height,
+        "k": _naive(df, ev.is_in(["strikeout", "strikeout_double_play"])),
+        "bb": _naive(df, ev == "walk"),
+        "hr_allowed": _naive(df, ev == "home_run"),
+        "pa_faced": _naive(df, ev.is_not_null()),
+    }
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_matchup_stats_matches_naive_reference(seed: int) -> None:
+    df = _random_events_df(seed)
+    m = df.filter(pl.col("pitcher") == 2)
+    ev = pl.col("events")
+    ab = _naive(m, ev.is_in(stats.AB_EVENTS))
+    h = _naive(m, ev.is_in(stats.HIT_EVENTS))
+    assert stats.matchup_stats(df, 2) == {
+        "pa": _naive(m, ev.is_not_null()),
+        "ab": ab,
+        "hits": h,
+        "strikeouts": _naive(m, ev.is_in(["strikeout", "strikeout_double_play"])),
+        "batting_avg": h / ab,
+    }
+
+
+def test_hot_cold_counts_return_python_ints() -> None:
+    """Callers format these; numpy/polars scalars would leak into JSON etc."""
+    out = stats.hot_cold_batter(_make_batter_df(["single", None, "walk"]))
+    assert all(type(out[k]) is int for k in ("pa", "ab", "h", "bb"))
+    out_p = stats.hot_cold_pitcher(_make_batter_df(["strikeout"]))
+    assert all(type(v) is int for v in out_p.values())
+
+
+def test_hot_cold_on_empty_frame_is_all_zero() -> None:
+    empty = pl.DataFrame(schema={"events": pl.String, "pitcher": pl.Int64})
+    assert stats.hot_cold_batter(empty) == {
+        "pa": 0, "ab": 0, "h": 0, "bb": 0, "avg": 0.0, "obp": 0.0, "slg": 0.0, "ops": 0.0,
+    }  # fmt: skip
+    assert stats.hot_cold_pitcher(empty) == {
+        "pitches": 0, "k": 0, "bb": 0, "hr_allowed": 0, "pa_faced": 0,
+    }  # fmt: skip
+
+
+def test_hot_cold_on_all_null_events() -> None:
+    df = _make_batter_df([None, None, None])
+    assert stats.hot_cold_batter(df)["pa"] == 0
+    assert stats.hot_cold_pitcher(df) == {
+        "pitches": 3, "k": 0, "bb": 0, "hr_allowed": 0, "pa_faced": 0,
+    }  # fmt: skip
+
+
+def test_aggregate_career_skips_null_ip_seasons() -> None:
+    frames = [
+        pl.DataFrame({"Name": ["A B"], "_year": [2020], "IP": [10.1], "ERA": [3.0]}),
+        pl.DataFrame(
+            {"Name": ["A B"], "_year": [2021], "IP": [None], "ERA": [9.0]},
+            schema_overrides={"IP": pl.Float64},
+        ),
+    ]
+    out = stats.aggregate_career(frames, "a", "b", [2020, 2021], "pitcher")
+    block = out["stats"]
+    assert isinstance(block, dict)
+    assert block["IP"] == "10.1"
+    assert block["ERA"] == "3.000"
+
+
+# ---------------------------------------------------------------------------
+# Parser edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_parse_pitch_arsenal_falls_back_to_reported_usage() -> None:
+    df = pl.DataFrame(
+        {
+            "pitch_type": ["ff", "sl", "ch"],
+            "avg_speed": [95.0, 86.0, None],
+            "avg_spin": [2300.0, None, 1700.0],
+            "pitch_usage": [55.0, None, 20.0],
+        }
+    )
+    out = stats.parse_pitch_arsenal(df)
+    # SL has no usage at all and CH has no speed: both dropped.
+    assert out == [{"pitch": "FF", "mph": 95.0, "spin": 2300.0, "usage_pct": 55.0}]
+
+
+def test_parse_pitch_arsenal_empty() -> None:
+    assert stats.parse_pitch_arsenal(pl.DataFrame()) == []
+
+
+def test_parse_exit_velo_missing_player_raises() -> None:
+    with pytest.raises(ValueError, match="player_id=9"):
+        stats.parse_exit_velo(pl.DataFrame({"player_id": [1]}), 9)
+
+
+def test_parse_percentile_ranks_tries_alternate_id_columns() -> None:
+    df = pl.DataFrame({"mlbam_id": [7], "xba": [88], "k_percent": [None]})
+    assert stats.parse_percentile_ranks(df, 7, "batter") == {"xBA": "88 th percentile"}
+
+
+def test_parse_percentile_ranks_missing_player_raises() -> None:
+    with pytest.raises(ValueError, match="No percentile data"):
+        stats.parse_percentile_ranks(pl.DataFrame({"player_id": [1]}), 2, "pitcher")
+
+
+def test_parse_expected_stats_formats_and_tolerates_strings() -> None:
+    df = pl.DataFrame({"player_id": [1], "est_ba": [0.2814], "era": ["n/a"]})
+    assert stats.parse_expected_stats(df, 1) == {"xBA": "0.281", "ERA": "n/a"}
+
+
+def test_parse_expected_stats_missing_player_raises() -> None:
+    with pytest.raises(ValueError, match="expected-stats"):
+        stats.parse_expected_stats(pl.DataFrame({"player_id": [1]}), 2)
