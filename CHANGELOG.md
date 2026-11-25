@@ -6,6 +6,15 @@ versions may break.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Concurrent writes of the same cache entry could corrupt or crash.** Every
+  writer of a key shared one `<key>.parquet.tmp` file, so two overlapping
+  `statcast()` calls caching the same chunk could publish a half-written
+  parquet, or fail when the other writer had already renamed the file away.
+  Each write now uses its own temp file, removed if the write fails. The
+  Chadwick register cache gets the same fix.
+
 ## [0.2.0] — 2026-11-22
 
 ### Fixed
