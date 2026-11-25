@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Literal
 
 import httpx
 import polars as pl
@@ -508,3 +509,113 @@ def test_pitcher_pitch_arsenal_stats_is_exported() -> None:
 
     assert bigleague.pitcher_pitch_arsenal_stats is savant.pitcher_pitch_arsenal_stats
     assert "pitcher_pitch_arsenal_stats" in bigleague.__all__
+
+
+# --- parsing off the event loop --------------------------------------------
+
+
+@respx.mock
+async def test_chunk_csv_is_parsed_in_a_worker_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A league chunk takes ~50 ms to parse; on the event loop that blocks
+    every other chunk's download. It must run in a thread."""
+    import threading
+
+    loop_thread = threading.get_ident()
+    parse_threads: list[int] = []
+    real_parse = savant._parse_csv
+
+    def _spy(body: bytes) -> pl.DataFrame:
+        parse_threads.append(threading.get_ident())
+        return real_parse(body)
+
+    monkeypatch.setattr(savant, "_parse_csv", _spy)
+    respx.get(_CSV_URL).mock(return_value=httpx.Response(200, content=_fake_csv_body(3)))
+    df = await savant.statcast(date(2024, 4, 1), date(2024, 4, 14))
+    assert df.height == 6  # two chunks x 3 rows
+    assert len(parse_threads) == 2
+    assert loop_thread not in parse_threads
+
+
+def test_parse_csv_quoted_empty_body_is_empty_frame() -> None:
+    df = savant._parse_csv(b'""')
+    assert df.is_empty()
+    assert df.schema == pl.Schema(STATCAST_SCHEMA)
+
+
+@respx.mock
+async def test_unparseable_chunk_end_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("BIGLEAGUE_NO_CACHE", raising=False)
+    monkeypatch.setattr(savant, "cache", StatcastCache(tmp_path))
+    respx.get(_CSV_URL).mock(return_value=httpx.Response(200, content=_fake_csv_body()))
+    await savant._fetch_chunk({"game_date_lt": "garbage"}, "k")
+    assert savant.cache.size() == 0
+
+
+@respx.mock
+@pytest.mark.parametrize(("player_type", "lookup"), [("pitcher", "pitchers_lookup[]"), ("batter", "batters_lookup[]")])  # fmt: skip
+async def test_statcast_season_dispatches_on_player_type(
+    player_type: Literal["batter", "pitcher"], lookup: str
+) -> None:
+    route = respx.get(_CSV_URL).mock(return_value=httpx.Response(200, content=b""))
+    await savant.statcast_season(42, 2020, player_type)
+    params = route.calls.last.request.url.params
+    assert params[lookup] == "42"
+    assert params["game_date_gt"] == "2020-03-01"
+    assert params["game_date_lt"] == "2020-11-30"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(5, 5.0), (2.5, 2.5), ("41.3", 41.3), ("", None), ("  ", None), ("n/a", None), (None, None)],
+)
+def test_to_float(value: object, expected: float | None) -> None:
+    assert savant._to_float(value) == expected
+
+
+_BOARD = "https://baseballsavant.mlb.com/leaderboard"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("fn_name", "path", "expected"),
+    [
+        ("batter_pitch_arsenal", "/pitch-arsenal-stats", {"type": "batter", "min": "25"}),
+        ("batter_exit_velo", "/statcast", {"type": "batter", "minBBE": "25"}),
+        ("pitcher_exit_velo", "/statcast", {"type": "pitcher", "minBBE": "25"}),
+        ("batter_expected_stats", "/expected_statistics", {"type": "batter", "min": "0"}),
+        ("pitcher_expected_stats", "/expected_statistics", {"type": "pitcher", "min": "0"}),
+        ("sprint_speed", "/sprint_speed", {"min_opp": "10"}),
+        ("pitcher_pitch_movement", "/pitch-movement", {"pitch_type": "FF", "min": "100"}),
+    ],
+)
+async def test_leaderboard_wrappers_hit_expected_endpoint(
+    fn_name: str, path: str, expected: dict[str, str]
+) -> None:
+    route = respx.get(f"{_BOARD}{path}").mock(
+        return_value=httpx.Response(200, content=b"player_id,x\n1,2\n")
+    )
+    df = await getattr(savant, fn_name)(2024)
+    params = route.calls.last.request.url.params
+    assert params["year"] == "2024"
+    assert params["csv"] == "true"
+    for k, v in expected.items():
+        assert params[k] == v
+    assert df.to_dicts() == [{"player_id": 1, "x": 2}]
+
+
+@respx.mock
+async def test_leaderboard_blank_body_is_empty_frame() -> None:
+    respx.get(f"{_BOARD}/sprint_speed").mock(return_value=httpx.Response(200, content=b"  \n"))
+    assert (await savant.sprint_speed(2024)).is_empty()
+
+
+def test_parse_csv_applies_schema_dtypes_without_date_sniffing() -> None:
+    """Every schema column comes back with its declared dtype (game_date as a
+    real Date) even though the parser no longer sniffs strings for dates."""
+    df = savant._parse_csv(_fake_csv_body(2))
+    assert df.schema["game_date"] == pl.Date
+    assert df["game_date"].to_list() == [date(2024, 4, 1)] * 2
+    mismatched = {c: (df.schema[c], t) for c, t in STATCAST_SCHEMA.items() if df.schema[c] != t}
+    assert mismatched == {}

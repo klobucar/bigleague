@@ -9,8 +9,17 @@ because Cloudflare allows the JA3 fingerprint of a real browser.
 callers can present a "try again in a few minutes" message without
 silently treating it as "no data found".
 
-Public functions wrap the sync calls in `asyncio.to_thread()` so they
-fit cleanly in async caller code.
+Public functions run the sync calls in worker threads so they fit cleanly
+in async caller code. Those calls go through a per-event-loop limiter: at
+most `_FG_MAX_CONCURRENCY` FanGraphs requests are in flight at once and the
+rest queue in asyncio (without occupying executor threads), so a career
+lookup fanning out over 20 seasons stays polite to Cloudflare.
+
+All requests share one lazily created `curl_cffi` Session, so TLS
+connections are reused instead of re-handshaking on every call (a career
+lookup makes one request per season) and Cloudflare's cookies persist
+between requests. The Session is thread-safe: it gives each worker thread
+its own curl handle.
 """
 
 from __future__ import annotations
@@ -19,7 +28,9 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
+import weakref
 from collections.abc import Callable
 from datetime import date
 from typing import Any, Literal
@@ -51,6 +62,10 @@ _NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re
 
 _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY = 0.75
+
+# Cap on concurrent FanGraphs requests per event loop. Each request is a
+# multi-MB leaderboard behind Cloudflare; more than a few at once risks a 403.
+_FG_MAX_CONCURRENCY = 3
 
 _CF_BLOCKED_MSG = (
     "FanGraphs is blocking the request right now (probably Cloudflare). Try again in a few minutes."
@@ -93,26 +108,50 @@ def _name_filter(first: str, last: str) -> Callable[[dict[str, Any]], bool]:
     return keep
 
 
+# One semaphore per event loop: an asyncio.Semaphore binds to the loop it is
+# first contended on, so a single module-level one would break the second
+# `asyncio.run(...)` in a process. Weak keys let a closed loop's entry go.
+_limiters: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _limiter() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _limiters.get(loop)
+    if sem is None:
+        sem = _limiters[loop] = asyncio.Semaphore(_FG_MAX_CONCURRENCY)
+    return sem
+
+
+async def _run_limited[**P, R](fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> R:
+    """Run a blocking FanGraphs call in a thread, under the request cap.
+
+    The permit is taken before the thread is, so queued calls wait in
+    asyncio rather than parking executor threads. Retry backoff happens
+    inside `fn`, so a struggling FanGraphs also slows the queue behind it.
+    """
+    async with _limiter():
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
+
 async def _player_board(
     year: int, kind: Literal["bat", "pit"], first: str, last: str
 ) -> pl.DataFrame:
     """One season's leaderboard, reduced to the named player's rows."""
-    return await asyncio.to_thread(
+    return await _run_limited(
         _fetch_leaderboard_sync, year, year, kind, 1, _name_filter(first, last)
     )
 
 
 def _strip_html(df: pl.DataFrame) -> pl.DataFrame:
     """FanGraphs wraps Name/Team in <a> tags; strip them in place."""
-    for col in ("Name", "Team"):
-        if col in df.columns:
-            df = df.with_columns(
-                pl.col(col)
-                .cast(pl.String)
-                .str.replace_all(_FG_HTML_TAG_RE.pattern, "")
-                .str.strip_chars()
-            )
-    return df
+    cols = [c for c in ("Name", "Team") if c in df.columns]
+    if not cols:
+        return df
+    return df.with_columns(
+        pl.col(cols).cast(pl.String).str.replace_all(_FG_HTML_TAG_RE.pattern, "").str.strip_chars()
+    )
 
 
 def _rows_to_df(rows: list[dict[str, Any]]) -> pl.DataFrame:
@@ -127,6 +166,35 @@ def _rows_to_df(rows: list[dict[str, Any]]) -> pl.DataFrame:
     return _strip_html(pl.DataFrame(rows, infer_schema_length=None))
 
 
+_session: Any = None
+_session_lock = threading.Lock()
+
+
+def _get_session() -> Any:
+    """The process-wide curl_cffi Session, created on first use.
+
+    Created lazily so importing this module doesn't import curl_cffi, and
+    under a lock so concurrent first calls from worker threads share one.
+    """
+    global _session
+    if _session is None:
+        with _session_lock:
+            if _session is None:
+                from curl_cffi import requests as cc_requests
+
+                _session = cc_requests.Session(impersonate="chrome", timeout=20)
+    return _session
+
+
+def _reset_session() -> None:
+    """Close and forget the shared Session. Used by tests."""
+    global _session
+    with _session_lock:
+        if _session is not None:
+            _session.close()
+        _session = None
+
+
 def _cc_get(url: str, params: dict[str, Any] | None = None) -> Any:
     """GET a FanGraphs URL through curl_cffi + Chrome impersonation.
 
@@ -134,12 +202,11 @@ def _cc_get(url: str, params: dict[str, Any] | None = None) -> Any:
     FangraphsBlockedError (Cloudflare gate), 5xx/connection errors retry with
     exponential backoff, everything else returns the raw curl_cffi response.
     """
-    from curl_cffi import requests as cc_requests
-
+    session = _get_session()
     resp = None
     for attempt in range(_RETRY_ATTEMPTS):
         try:
-            resp = cc_requests.get(url, params=params, impersonate="chrome", timeout=20)
+            resp = session.get(url, params=params, impersonate="chrome", timeout=20)
         except Exception as exc:
             if attempt < _RETRY_ATTEMPTS - 1:
                 log.warning(
@@ -310,35 +377,35 @@ async def leaderboard(
     kind: Literal["bat", "pit"],
     qual: int | str = 1,
 ) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_leaderboard_sync, year, year, kind, qual)
+    return await _run_limited(_fetch_leaderboard_sync, year, year, kind, qual)
 
 
 async def batting_stats(start_season: int, end_season: int, qual: int | str = 1) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_leaderboard_sync, start_season, end_season, "bat", qual)
+    return await _run_limited(_fetch_leaderboard_sync, start_season, end_season, "bat", qual)
 
 
 async def pitching_stats(start_season: int, end_season: int, qual: int | str = 1) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_leaderboard_sync, start_season, end_season, "pit", qual)
+    return await _run_limited(_fetch_leaderboard_sync, start_season, end_season, "pit", qual)
 
 
 async def batting_stats_range(start: date, end: date) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_leaderboard_range_sync, start, end, "bat")
+    return await _run_limited(_fetch_leaderboard_range_sync, start, end, "bat")
 
 
 async def pitching_stats_range(start: date, end: date) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_leaderboard_range_sync, start, end, "pit")
+    return await _run_limited(_fetch_leaderboard_range_sync, start, end, "pit")
 
 
 async def fielding_stats(start_season: int, end_season: int) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_fielding_sync, start_season, end_season)
+    return await _run_limited(_fetch_fielding_sync, start_season, end_season)
 
 
 async def team_batting(start_season: int, end_season: int) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_team_sync, start_season, end_season, "bat")
+    return await _run_limited(_fetch_team_sync, start_season, end_season, "bat")
 
 
 async def team_pitching(start_season: int, end_season: int) -> pl.DataFrame:
-    return await asyncio.to_thread(_fetch_team_sync, start_season, end_season, "pit")
+    return await _run_limited(_fetch_team_sync, start_season, end_season, "pit")
 
 
 # ---------------------------------------------------------------------------
@@ -378,27 +445,31 @@ async def player_stats_for_year(
 
 
 async def player_stats(first: str, last: str, year: int) -> dict[str, Any]:
-    """FanGraphs season stats for a player; auto-detects pitcher vs batter."""
-    pitch_df = await _player_board(year, "pit", first, last)
-    if not pitch_df.is_empty():
-        row = _name_match(pitch_df, first, last)
-        if not row.is_empty():
-            r = row.row(0, named=True)
-            return {
-                "type": "pitcher",
-                "team": r.get("Team", "N/A"),
-                "stats": _player_stats_from_row(r, _PITCHING_KEYS),
-            }
+    """FanGraphs season stats for a player; auto-detects pitcher vs batter.
 
-    bat_df = await _player_board(year, "bat", first, last)
-    if not bat_df.is_empty():
-        row = _name_match(bat_df, first, last)
+    Both boards are fetched concurrently; a pitcher-board match wins. An
+    error on one board only surfaces if the answer depended on it: a
+    pitcher match is returned even if the batter board failed.
+    """
+    pit_res, bat_res = await asyncio.gather(
+        _player_board(year, "pit", first, last),
+        _player_board(year, "bat", first, last),
+        return_exceptions=True,
+    )
+    sides = (
+        ("pitcher", pit_res, _PITCHING_KEYS),
+        ("batter", bat_res, _BATTING_KEYS),
+    )
+    for kind, res, keys in sides:
+        if isinstance(res, BaseException):
+            raise res
+        row = _name_match(res, first, last)
         if not row.is_empty():
             r = row.row(0, named=True)
             return {
-                "type": "batter",
+                "type": kind,
                 "team": r.get("Team", "N/A"),
-                "stats": _player_stats_from_row(r, _BATTING_KEYS),
+                "stats": _player_stats_from_row(r, keys),
             }
 
     raise ValueError(f"No FanGraphs stats found for {first} {last} in {year}.")
@@ -419,12 +490,12 @@ async def career_stats(first: str, last: str) -> dict[str, Any]:
     """Aggregate a player's career across all years they appear in the
     register's mlb_played_first..last range.
 
-    Probes the debut year to learn whether the player lives on the pitcher
-    or batter leaderboard (pitcher-side preferred, matching `player_stats`),
-    then fetches the remaining years for that side only — concurrently,
-    instead of 2 sequential full-leaderboard pulls per career year. If the
-    probe year has the player on neither side (injury year, register noise),
-    fall back to sweeping each side across the remaining years.
+    Probes both boards for the debut year at once to learn whether the
+    player lives on the pitcher or batter leaderboard (pitcher-side
+    preferred, matching `player_stats`), then fetches the remaining years
+    for that side only. If the probe year has the player on neither side
+    (injury year, register noise), both sides are swept across the remaining
+    years. All fetches share the FanGraphs request cap.
     """
     from bigleague.players import mlb_years
 
@@ -432,22 +503,25 @@ async def career_stats(first: str, last: str) -> dict[str, Any]:
     years = list(range(debut, last_yr + 1))
 
     probe_year, rest_years = years[0], years[1:]
-    probe: pl.DataFrame | None = await player_stats_for_year(first, last, probe_year, "pitcher")
-    side: Literal["pitcher", "batter"] = "pitcher"
-    if probe is None:
-        probe = await player_stats_for_year(first, last, probe_year, "batter")
-        side = "batter"
+    pit_probe, bat_probe = await asyncio.gather(
+        player_stats_for_year(first, last, probe_year, "pitcher"),
+        player_stats_for_year(first, last, probe_year, "batter"),
+    )
+    side: Literal["pitcher", "batter"] = "pitcher" if pit_probe is not None else "batter"
+    probe = pit_probe if pit_probe is not None else bat_probe
 
     if probe is not None:
         frames = [probe, *await _career_frames_for_side(first, last, rest_years, side)]
         return aggregate_career(frames, first, last, years, side)
 
-    # Ambiguous probe: the player has no data in the debut year. Sweep the
-    # pitcher side first (same preference order), then the batter side.
-    pitch_frames = await _career_frames_for_side(first, last, rest_years, "pitcher")
+    # Ambiguous probe: the player has no data in the debut year. Sweep both
+    # sides together; the pitcher side still wins if both have data.
+    pitch_frames, bat_frames = await asyncio.gather(
+        _career_frames_for_side(first, last, rest_years, "pitcher"),
+        _career_frames_for_side(first, last, rest_years, "batter"),
+    )
     if pitch_frames:
         return aggregate_career(pitch_frames, first, last, years, "pitcher")
-    bat_frames = await _career_frames_for_side(first, last, rest_years, "batter")
     if bat_frames:
         return aggregate_career(bat_frames, first, last, years, "batter")
     raise ValueError(f"No FanGraphs career data found for {first} {last}.")
@@ -482,13 +556,15 @@ async def top_leaderboard(
             )
         return out
 
-    boards: list[list[dict[str, Any]]] = []
+    # Each board is a ~7 MB download, so stop at the first one that has the
+    # stat rather than always pulling both in `auto` mode.
+    kinds: list[Literal["bat", "pit"]] = []
     if player_type in ("pitcher", "auto"):
-        boards.append(_from_df(await leaderboard(year, "pit")))
+        kinds.append("pit")
     if player_type in ("batter", "auto"):
-        boards.append(_from_df(await leaderboard(year, "bat")))
-
-    for board in boards:
+        kinds.append("bat")
+    for kind in kinds:
+        board = _from_df(await leaderboard(year, kind))
         if board:
             return board
 
@@ -583,4 +659,4 @@ async def playoff_odds() -> pl.DataFrame:
     Raises FangraphsBlockedError on a Cloudflare 403, and ValueError if the
     __NEXT_DATA__ blob is present but no playoff-odds rows are found.
     """
-    return await asyncio.to_thread(_playoff_odds_sync)
+    return await _run_limited(_playoff_odds_sync)
