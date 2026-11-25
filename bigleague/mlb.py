@@ -5,6 +5,7 @@ Team ID and abbreviation tables are hand-curated; preserve them verbatim.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, timedelta
 from typing import Any
@@ -427,13 +428,19 @@ async def players(season: int) -> list[dict[str, Any]]:
 
 
 async def players_multi_season(seasons: list[int]) -> list[dict[str, Any]]:
-    """Fetch players for multiple seasons; log per-season failures."""
+    """Fetch players for multiple seasons concurrently; log per-season failures.
+
+    Results keep the order of `seasons`; a failed season contributes nothing.
+    """
+    results = await asyncio.gather(*(players(s) for s in seasons), return_exceptions=True)
     combined: list[dict[str, Any]] = []
-    for season in seasons:
-        try:
-            combined.extend(await players(season))
-        except Exception as exc:
-            _log.warning("players(%d) failed: %s", season, exc)
+    for season, result in zip(seasons, results, strict=True):
+        if isinstance(result, BaseException):
+            if not isinstance(result, Exception):
+                raise result  # never swallow cancellation / KeyboardInterrupt
+            _log.warning("players(%d) failed: %s", season, result)
+            continue
+        combined.extend(result)
     return combined
 
 

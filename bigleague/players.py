@@ -35,7 +35,7 @@ from pathlib import Path
 
 import polars as pl
 
-from bigleague.cache import resolve_cache_dir
+from bigleague.cache import atomic_write_parquet, resolve_cache_dir
 from bigleague.http import get_client
 
 # Chadwick no longer ships a single people.csv — the register is split into
@@ -193,11 +193,7 @@ async def _fetch_register() -> pl.DataFrame:
 
 def _write_register_sync(df: pl.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Temp-file + atomic rename so a crash mid-write can't leave a
-    # truncated parquet that breaks every subsequent load.
-    tmp = path.with_suffix(".parquet.tmp")
-    df.write_parquet(tmp)
-    tmp.replace(path)
+    atomic_write_parquet(df, path)
 
 
 def _read_cached_register() -> pl.DataFrame | None:

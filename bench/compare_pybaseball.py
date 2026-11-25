@@ -20,6 +20,7 @@ import os
 import resource
 import subprocess
 import sys
+import tempfile
 import time
 import tracemalloc
 from pathlib import Path
@@ -134,9 +135,11 @@ def _spawn(lib: str, scenario: str, player: int, year: int, no_cache: bool) -> d
     # `python bench/x.py` puts bench/ on sys.path, not the project root,
     # so bigleague's source tree isn't importable without help.
     env["PYTHONPATH"] = _PROJECT_ROOT + os.pathsep + env.get("PYTHONPATH", "")
-    # Both libs try to mkdir under $HOME at import / first-use. Redirect to /tmp.
-    env.setdefault("PYBASEBALL_CACHE", "/tmp/pybaseball_cache_bench")
-    env.setdefault("BIGLEAGUE_CACHE_DIR", "/tmp/bigleague_cache_bench")
+    # Both libs try to mkdir under $HOME at import / first-use. Redirect to
+    # the platform temp dir (honors $TMPDIR rather than assuming /tmp).
+    tmp = Path(tempfile.gettempdir())
+    env.setdefault("PYBASEBALL_CACHE", str(tmp / "pybaseball_cache_bench"))
+    env.setdefault("BIGLEAGUE_CACHE_DIR", str(tmp / "bigleague_cache_bench"))
     if no_cache:
         env["BIGLEAGUE_NO_CACHE"] = "1"
     else:

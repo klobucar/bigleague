@@ -6,6 +6,33 @@ versions may break.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Concurrent writes of the same cache entry could corrupt or crash.** Every
+  writer of a key shared one `<key>.parquet.tmp` file, so two overlapping
+  `statcast()` calls caching the same chunk could publish a half-written
+  parquet, or fail when the other writer had already renamed the file away.
+  Each write now uses its own temp file, removed if the write fails. The
+  Chadwick register cache gets the same fix.
+
+### Changed
+
+- **FanGraphs requests are capped at 3 in flight at once,** and the rest
+  queue. A career lookup used to fire one request per season with no limit.
+- `fangraphs.player_stats` fetches the pitcher and batter boards
+  concurrently, and `career_stats` probes both sides of the debut year
+  concurrently. A pitcher match still wins. A pitcher lookup now downloads
+  the batter board too; a batter lookup no longer waits on the pitcher board.
+- FanGraphs requests share one `curl_cffi` session, so TLS connections and
+  Cloudflare cookies are reused instead of renegotiated on every call.
+- `fangraphs.top_leaderboard` (`player_type="auto"`) stops after the pitcher
+  board when that board has the stat, instead of always downloading both
+  (about 7 MB each).
+- Statcast CSV chunks parse about 3x faster (about 45 ms to 16 ms for a full
+  league chunk, measured on a synthetic 25,000-row, 118-column chunk), and
+  parse in a worker thread so they overlap with other chunks' downloads.
+- `mlb.players_multi_season` fetches its seasons concurrently.
+
 ## [0.2.0] — 2026-11-22
 
 ### Fixed

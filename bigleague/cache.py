@@ -18,6 +18,7 @@ for small caches, just no negative-lookup shortcut. Install with
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 import polars as pl
@@ -46,6 +47,28 @@ def resolve_cache_dir() -> Path:
     """
     env_dir = os.environ.get("BIGLEAGUE_CACHE_DIR")
     return Path(env_dir).expanduser() if env_dir else _DEFAULT_CACHE_DIR
+
+
+def atomic_write_parquet(df: pl.DataFrame, path: Path) -> None:
+    """Write `df` to `path` so readers only ever see a complete file.
+
+    Writes to a temp file in the same directory, then atomically renames it
+    over `path`, so a crash mid-write can never leave a truncated parquet
+    that poisons every later read. The temp name is unique per writer: two
+    threads (or processes) caching the same key would otherwise share one
+    temp path, and one writer's rename could publish the other's half-written
+    bytes or fail outright because the file was already renamed away. The
+    temp file is removed if the write fails.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        df.write_parquet(tmp)
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 class StatcastCache:
@@ -110,14 +133,9 @@ class StatcastCache:
         # writes in a never-created directory.
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_bloom_seeded()
-        # Write to a temp file in the same directory, then atomically rename
-        # over the final path, so a crash mid-write can never leave a
-        # truncated parquet that poisons every later get(). The temp path is
-        # derived from the containment-validated final path, so it can't
-        # escape cache_dir either.
-        tmp = path.with_suffix(".parquet.tmp")
-        df.write_parquet(tmp)
-        tmp.replace(path)
+        # The temp file lives next to the containment-validated final path,
+        # so it can't escape cache_dir either.
+        atomic_write_parquet(df, path)
         if self.bloom is not None:
             self.bloom.insert(key)
 

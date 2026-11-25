@@ -34,10 +34,10 @@ def _next_data_html(queries: list[dict[str, Any]]) -> str:
 
 
 def _patch_cc(monkeypatch: pytest.MonkeyPatch, mock_get: Any) -> None:
-    """Replace curl_cffi.requests.get with our mock."""
-    import curl_cffi.requests as cc
-
-    monkeypatch.setattr(cc, "get", mock_get)
+    """Route the shared curl_cffi Session's `get` to our mock."""
+    session = MagicMock()
+    session.get = mock_get
+    monkeypatch.setattr(fangraphs, "_session", session)
 
 
 async def test_403_raises_fangraphs_blocked_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -291,8 +291,8 @@ def _patch_mlb_years(monkeypatch: pytest.MonkeyPatch, debut: int, last: int) -> 
 async def test_career_stats_probes_pitcher_side_then_gathers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A pitcher's career must never fetch the batter leaderboard: the first
-    year is probed, then the remaining years fetch only the matched side."""
+    """Only the probe year touches the batter board: once the probe finds the
+    player on the pitcher side, the remaining years fetch only that side."""
     _patch_mlb_years(monkeypatch, 2020, 2022)
     era = {2020: 3.00, 2021: 6.00, 2022: 4.50}
     seen: list[dict[str, Any]] = []
@@ -321,9 +321,9 @@ async def test_career_stats_probes_pitcher_side_then_gathers(
     # Equal-IP seasons: ERA averages to (3 + 6 + 4.5) / 3 = 4.5; WAR sums.
     assert stats_block["ERA"] == "4.500"
     assert stats_block["WAR"] == "6.000"
-    # Exactly one fetch per career year, all pitcher-side.
-    assert all(p["stats"] == "pit" for p in seen)
-    assert sorted(p["season"] for p in seen) == [2020, 2021, 2022]
+    # One pitcher fetch per career year; the batter board only for the probe.
+    assert sorted(p["season"] for p in seen if p["stats"] == "pit") == [2020, 2021, 2022]
+    assert [p["season"] for p in seen if p["stats"] == "bat"] == [2020]
 
 
 async def test_career_stats_falls_back_to_batter_side(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -538,3 +538,308 @@ async def test_public_leaderboards_still_return_the_whole_league(
     _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(200, {"data": _LEAGUE})))
     df = await fangraphs.leaderboard(2024, "bat")
     assert df.height == len(_LEAGUE)
+
+
+# --- top_leaderboard fetch economy ------------------------------------------
+
+
+async def test_top_leaderboard_auto_stops_after_pitcher_board_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each board is a ~7 MB download; `auto` must not pull the batter board
+    when the pitcher board already answered."""
+    pit = {"data": [{"Name": "P", "Team": "NYY", "ERA": 2.5}]}
+    mock = MagicMock(return_value=_fake_resp(200, pit))
+    _patch_cc(monkeypatch, mock)
+
+    out = await fangraphs.top_leaderboard("era", 2024)
+    assert out[0]["name"] == "P"
+    assert [c.kwargs["params"]["stats"] for c in mock.call_args_list] == ["pit"]
+
+
+async def test_top_leaderboard_auto_falls_through_to_batter_board(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pit = {"data": [{"Name": "P", "Team": "NYY", "ERA": 2.5}]}
+    bat = {"data": [{"Name": "B", "Team": "BOS", "wRC+": 160}]}
+
+    def _get(_url, params, **_kw):
+        return _fake_resp(200, pit if params["stats"] == "pit" else bat)
+
+    mock = MagicMock(side_effect=_get)
+    _patch_cc(monkeypatch, mock)
+
+    out = await fangraphs.top_leaderboard("WRC+", 2024)
+    assert out == [{"rank": 1, "name": "B", "team": "BOS", "value": "160"}]
+    assert [c.kwargs["params"]["stats"] for c in mock.call_args_list] == ["pit", "bat"]
+
+
+async def test_top_leaderboard_pitcher_only_never_fetches_batters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock = MagicMock(return_value=_fake_resp(200, {"data": []}))
+    _patch_cc(monkeypatch, mock)
+    with pytest.raises(ValueError, match="Stat 'HR' not found"):
+        await fangraphs.top_leaderboard("HR", 2024, player_type="pitcher")
+    assert mock.call_count == 1
+
+
+# --- transport retries -------------------------------------------------------
+
+
+async def test_transport_error_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr(fangraphs.time, "sleep", delays.append)
+    mock = MagicMock(side_effect=[ConnectionError("reset"), _fake_resp(200, {"data": []})])
+    _patch_cc(monkeypatch, mock)
+
+    assert (await fangraphs.leaderboard(2024, "bat")).is_empty()
+    assert mock.call_count == 2
+    assert delays == [0.75]
+
+
+async def test_transport_error_raises_after_final_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fangraphs.time, "sleep", lambda *_a: None)
+    mock = MagicMock(side_effect=ConnectionError("reset"))
+    _patch_cc(monkeypatch, mock)
+
+    with pytest.raises(ConnectionError):
+        await fangraphs.leaderboard(2024, "bat")
+    assert mock.call_count == 3
+
+
+async def test_bare_list_payload_is_treated_as_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    resp = _fake_resp(200)
+    resp.json.return_value = [{"Name": "A", "Team": "NYY", "HR": 1}]
+    _patch_cc(monkeypatch, MagicMock(return_value=resp))
+    df = await fangraphs.leaderboard(2024, "bat")
+    assert df["Name"].to_list() == ["A"]
+
+
+def test_invalid_kind_rejected() -> None:
+    with pytest.raises(ValueError, match="kind must be"):
+        fangraphs._fetch_leaderboard_sync(2024, 2024, "fld")  # ty: ignore[invalid-argument-type]
+
+
+def test_strip_html_without_name_or_team_is_a_no_op() -> None:
+    df = pl.DataFrame({"HR": [1]})
+    assert fangraphs._strip_html(df) is df
+
+
+# --- career fallbacks --------------------------------------------------------
+
+
+async def test_career_stats_ambiguous_probe_sweeps_batter_side(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_mlb_years(monkeypatch, 2020, 2021)
+
+    def _get(_url, params, **_kw):
+        if params["stats"] == "bat" and params["season"] == 2021:
+            row = {"Name": "Test Player", "Team": "NYY", "PA": 500, "HR": 30, "AVG": 0.300}
+            return _fake_resp(200, {"data": [row]})
+        return _fake_resp(200, {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+    out = await fangraphs.career_stats("Test", "Player")
+    assert out["type"] == "batter"
+
+
+async def test_career_stats_nothing_found_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_mlb_years(monkeypatch, 2020, 2021)
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(200, {"data": []})))
+    with pytest.raises(ValueError, match="No FanGraphs career data"):
+        await fangraphs.career_stats("Nobody", "Here")
+
+
+async def test_player_stats_for_year_swallows_non_blocking_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(200, {"data": "not-a-list"})))
+    assert await fangraphs.player_stats_for_year("A", "B", 2024, "batter") is None
+
+
+# --- shared session ----------------------------------------------------------
+
+
+@pytest.fixture
+def fresh_session() -> Any:
+    fangraphs._reset_session()
+    yield
+    fangraphs._reset_session()
+
+
+@pytest.mark.usefixtures("fresh_session")
+def test_session_is_created_once_and_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    import curl_cffi.requests as cc
+
+    made: list[MagicMock] = []
+
+    def _factory(**kwargs: Any) -> MagicMock:
+        s = MagicMock()
+        s.get.return_value = _fake_resp(200, {"data": []})
+        s.init_kwargs = kwargs
+        made.append(s)
+        return s
+
+    monkeypatch.setattr(cc, "Session", _factory)
+    fangraphs._fetch_leaderboard_sync(2024, 2024, "bat")
+    fangraphs._fetch_leaderboard_sync(2024, 2024, "pit")
+
+    assert len(made) == 1
+    assert made[0].get.call_count == 2
+    assert made[0].init_kwargs["impersonate"] == "chrome"
+    # Impersonation is also pinned per request, so a session default can't drift.
+    assert all(c.kwargs["impersonate"] == "chrome" for c in made[0].get.call_args_list)
+
+
+@pytest.mark.usefixtures("fresh_session")
+def test_concurrent_first_calls_share_one_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+
+    import curl_cffi.requests as cc
+
+    made: list[MagicMock] = []
+
+    def _slow_factory(**_kwargs: Any) -> MagicMock:
+        _time.sleep(0.02)  # widen the race window
+        s = MagicMock()
+        made.append(s)
+        return s
+
+    monkeypatch.setattr(cc, "Session", _slow_factory)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        got = list(pool.map(lambda _i: fangraphs._get_session(), range(8)))
+
+    assert len(made) == 1
+    assert all(s is made[0] for s in got)
+
+
+@pytest.mark.usefixtures("fresh_session")
+def test_reset_session_closes_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    import curl_cffi.requests as cc
+
+    s = MagicMock()
+    monkeypatch.setattr(cc, "Session", lambda **_kw: s)
+    assert fangraphs._get_session() is s
+    fangraphs._reset_session()
+    s.close.assert_called_once()
+    assert fangraphs._session is None
+
+
+@pytest.mark.usefixtures("fresh_session")
+def test_import_does_not_create_a_session() -> None:
+    assert fangraphs._session is None
+
+
+# --- request cap + concurrent lookups ---------------------------------------
+
+
+def _tracking_get(payload_for: Any, delay: float = 0.03) -> tuple[MagicMock, dict[str, int]]:
+    """A session.get mock that records peak concurrent calls across threads."""
+    import threading
+    import time as _time
+
+    lock = threading.Lock()
+    state = {"in_flight": 0, "peak": 0}
+
+    def _get(_url, params, **_kw):
+        with lock:
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+        _time.sleep(delay)
+        with lock:
+            state["in_flight"] -= 1
+        return _fake_resp(200, payload_for(params))
+
+    return MagicMock(side_effect=_get), state
+
+
+async def test_requests_are_capped_and_queued(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    mock, state = _tracking_get(lambda _p: {"data": []})
+    _patch_cc(monkeypatch, mock)
+
+    await asyncio.gather(*(fangraphs.leaderboard(2000 + i, "bat") for i in range(9)))
+    assert mock.call_count == 9  # every request queued and ran
+    assert state["peak"] == fangraphs._FG_MAX_CONCURRENCY  # parallel, but capped
+
+
+async def test_career_fan_out_respects_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_mlb_years(monkeypatch, 2010, 2024)
+    row = {"Name": "Test Player", "Team": "NYY", "IP": 100.0, "ERA": 3.0}
+    mock, state = _tracking_get(lambda p: {"data": [row] if p["stats"] == "pit" else []})
+    _patch_cc(monkeypatch, mock)
+
+    out = await fangraphs.career_stats("Test", "Player")
+    assert out["stats"]["Seasons"] == "15"
+    assert 1 < state["peak"] <= fangraphs._FG_MAX_CONCURRENCY
+
+
+def test_limiter_works_across_separate_event_loops(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A module-level asyncio.Semaphore binds to the first loop that contends
+    it; reusing it from a second asyncio.run() would raise."""
+    import asyncio
+
+    mock, state = _tracking_get(lambda _p: {"data": []}, delay=0.01)
+    _patch_cc(monkeypatch, mock)
+
+    async def _burst() -> None:
+        await asyncio.gather(*(fangraphs.leaderboard(2024, "bat") for _ in range(6)))
+
+    asyncio.run(_burst())
+    asyncio.run(_burst())
+    assert mock.call_count == 12
+    assert state["peak"] == fangraphs._FG_MAX_CONCURRENCY
+
+
+async def test_player_stats_fetches_both_boards_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bat = {"data": [{"Name": "Aaron Judge", "Team": "NYY", "AVG": 0.3}]}
+    mock, state = _tracking_get(lambda p: bat if p["stats"] == "bat" else {"data": []})
+    _patch_cc(monkeypatch, mock)
+
+    out = await fangraphs.player_stats("Aaron", "Judge", 2024)
+    assert out["type"] == "batter"
+    assert state["peak"] == 2
+
+
+async def test_player_stats_prefers_pitcher_even_if_batter_board_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pit = {"data": [{"Name": "Shohei Ohtani", "Team": "LAD", "ERA": 3.0}]}
+
+    def _get(_url, params, **_kw):
+        if params["stats"] == "bat":
+            return _fake_resp(403)
+        return _fake_resp(200, pit)
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+    out = await fangraphs.player_stats("Shohei", "Ohtani", 2024)
+    assert out["type"] == "pitcher"
+
+
+async def test_player_stats_surfaces_batter_error_when_pitcher_misses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _get(_url, params, **_kw):
+        if params["stats"] == "bat":
+            return _fake_resp(403)
+        return _fake_resp(200, {"data": []})
+
+    _patch_cc(monkeypatch, MagicMock(side_effect=_get))
+    with pytest.raises(fangraphs.FangraphsBlockedError):
+        await fangraphs.player_stats("Aaron", "Judge", 2024)
+
+
+async def test_player_stats_prefers_pitcher_when_on_both_boards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {"Name": "Two Way", "Team": "LAD", "ERA": 3.0, "AVG": 0.280}
+    _patch_cc(monkeypatch, MagicMock(return_value=_fake_resp(200, {"data": [row]})))
+    assert (await fangraphs.player_stats("Two", "Way", 2024))["type"] == "pitcher"

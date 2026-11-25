@@ -353,3 +353,267 @@ async def test_schedule_empty_raises() -> None:
 async def test_schedule_rejects_unknown_team() -> None:
     with pytest.raises(ValueError, match="Unknown team"):
         await mlb.schedule("XXX", 2024)
+
+
+# ---------------------------------------------------------------------------
+# Injuries note formatting
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_injuries_note_falls_back_when_stint_or_injury_missing() -> None:
+    def _p(name: str, code: str, desc: str, note: str | None) -> dict:
+        row = {
+            "person": {"fullName": name},
+            "position": {"abbreviation": "P"},
+            "status": {"code": code, "description": desc},
+        }
+        if note is not None:
+            row["note"] = note
+        return row
+
+    respx.get(f"{_BASE}/teams/147/roster").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "roster": [
+                    _p("Stint Only", "D60", "Injured 60-Day", None),
+                    _p("Injury Only", "D10", "", "Hamstring"),
+                    _p("Neither", "D7", "", "  "),
+                ]
+            },
+        )
+    )
+    notes = {r["name"]: r["note"] for r in await mlb.injuries("NYY")}
+    assert notes == {"Stint Only": "60-Day IL", "Injury Only": "Hamstring", "Neither": "—"}
+
+
+@respx.mock
+async def test_injuries_tolerates_null_status() -> None:
+    respx.get(f"{_BASE}/teams/147/roster").mock(
+        return_value=httpx.Response(200, json={"roster": [{"person": {}, "status": None}]})
+    )
+    assert await mlb.injuries("NYY") == []
+
+
+# ---------------------------------------------------------------------------
+# Transactions
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_transactions_newest_first_with_date_trimmed() -> None:
+    route = respx.get(f"{_BASE}/transactions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "transactions": [
+                    {"date": "2024-05-01T00:00:00", "description": "older"},
+                    {"date": "2024-05-03T00:00:00", "description": "newest"},
+                    {"date": "2024-05-02T00:00:00"},
+                ]
+            },
+        )
+    )
+    rows = await mlb.transactions("nyy", days=3)
+    assert [r["desc"] for r in rows] == ["newest", "—", "older"]
+    assert rows[0]["date"] == "2024-05-03"
+    params = route.calls.last.request.url.params
+    assert params["teamId"] == "147"
+
+
+@respx.mock
+async def test_transactions_empty_raises() -> None:
+    respx.get(f"{_BASE}/transactions").mock(return_value=httpx.Response(200, json={}))
+    with pytest.raises(ValueError, match="No transactions for NYY"):
+        await mlb.transactions("NYY")
+
+
+# ---------------------------------------------------------------------------
+# Live scores + next game
+# ---------------------------------------------------------------------------
+
+
+def _live_game(state: str, linescore: dict | None = None) -> dict:
+    game: dict = {
+        "gamePk": 1,
+        "gameDate": "2024-05-01T23:05:00Z",
+        "status": {"detailedState": state},
+        "teams": {
+            "home": {"team": {"name": "Yankees"}, "score": 3},
+            "away": {"team": {"name": "Red Sox"}},
+        },
+    }
+    if linescore is not None:
+        game["linescore"] = linescore
+    return game
+
+
+@respx.mock
+async def test_live_scores_formats_in_progress_and_pregame() -> None:
+    respx.get(f"{_BASE}/schedule").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "dates": [
+                    {
+                        "games": [
+                            _live_game(
+                                "In Progress",
+                                {"currentInningOrdinal": "7th", "inningHalf": "Top", "outs": 2},
+                            ),
+                            _live_game("Pre-Game"),
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+    live, pre = await mlb.live_scores("NYY")
+    assert live["inning"] == "Top 7th"
+    assert live["outs"] == 2
+    assert live["home_score"] == 3
+    assert live["away_score"] == 0  # absent score defaults to 0
+    assert pre["inning"] == "Pre-Game"  # no linescore: status stands in
+
+
+@respx.mock
+async def test_live_scores_off_day_raises() -> None:
+    respx.get(f"{_BASE}/schedule").mock(return_value=httpx.Response(200, json={"dates": []}))
+    with pytest.raises(ValueError, match="NYY has no game today"):
+        await mlb.live_scores("nyy")
+
+
+@respx.mock
+async def test_next_game_skips_finished_games_and_formats_time() -> None:
+    def _g(state: str, game_date: str, home_pp: str | None = None) -> dict:
+        home: dict = {"team": {"name": "Yankees"}}
+        if home_pp:
+            home["probablePitcher"] = {"fullName": home_pp}
+        return {
+            "gameDate": game_date,
+            "status": {"abstractGameState": state},
+            "teams": {"home": home, "away": {"team": {"name": "Red Sox"}}},
+        }
+
+    respx.get(f"{_BASE}/schedule").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "dates": [
+                    {"date": "2024-05-01", "games": [_g("Final", "2024-05-01T23:05:00Z")]},
+                    {
+                        "date": "2024-05-02",
+                        "games": [_g("Preview", "2024-05-02T17:35:00Z", home_pp="Gerrit Cole")],
+                    },
+                ]
+            },
+        )
+    )
+    game = await mlb.next_game("NYY")
+    assert game["date"] == "2024-05-02"
+    assert game["time"] == "17:35 UTC"
+    assert game["home_probable"] == "Gerrit Cole"
+    assert game["away_probable"] == "TBD"
+
+
+@respx.mock
+async def test_next_game_time_tbd_when_unset() -> None:
+    respx.get(f"{_BASE}/schedule").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "dates": [
+                    {
+                        "date": "2024-05-02",
+                        "games": [
+                            {
+                                "status": {"abstractGameState": "Preview"},
+                                "teams": {
+                                    "home": {"team": {"name": "H"}},
+                                    "away": {"team": {"name": "A"}},
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+    )
+    assert (await mlb.next_game("NYY"))["time"] == "TBD"
+
+
+@respx.mock
+async def test_next_game_none_scheduled_raises() -> None:
+    respx.get(f"{_BASE}/schedule").mock(return_value=httpx.Response(200, json={"dates": []}))
+    with pytest.raises(ValueError, match="next 14 days"):
+        await mlb.next_game("NYY")
+
+
+# ---------------------------------------------------------------------------
+# players_multi_season + standings
+# ---------------------------------------------------------------------------
+
+
+async def test_players_multi_season_fetches_concurrently_and_keeps_order(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import asyncio
+
+    in_flight = 0
+    peak = 0
+
+    async def _fake_players(season: int) -> list[dict]:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        if season == 2022:
+            raise RuntimeError("upstream 500")
+        return [{"id": season}]
+
+    monkeypatch.setattr(mlb, "players", _fake_players)
+    with caplog.at_level("WARNING", logger="bigleague"):
+        out = await mlb.players_multi_season([2024, 2022, 2023])
+
+    assert [p["id"] for p in out] == [2024, 2023]  # input order, failure skipped
+    assert peak == 3  # all seasons in flight together, not one at a time
+    assert "players(2022) failed: upstream 500" in caplog.text
+
+
+async def test_players_multi_season_propagates_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    async def _cancelled(_season: int) -> list[dict]:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(mlb, "players", _cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await mlb.players_multi_season([2024])
+
+
+@respx.mock
+async def test_players_maps_team_ids_to_canonical_abbr() -> None:
+    respx.get(f"{_BASE}/sports/1/players").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "people": [
+                    {"id": 1, "firstName": "A", "lastName": "B", "currentTeam": {"id": 135}},
+                    {"id": 2, "firstName": "C", "lastName": "D", "currentTeam": None},
+                ]
+            },
+        )
+    )
+    out = await mlb.players(2024)
+    assert [p["team"] for p in out] == ["SD", ""]
+
+
+@respx.mock
+async def test_standings_empty_raises() -> None:
+    respx.get(f"{_BASE}/standings").mock(return_value=httpx.Response(200, json={"records": []}))
+    with pytest.raises(ValueError, match="No standings data for 2024"):
+        await mlb.standings(2024)

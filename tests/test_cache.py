@@ -215,3 +215,43 @@ async def test_bloom_cache_is_usable_from_worker_threads(tmp_path: Path) -> None
     assert await asyncio.to_thread(c.get, "missing") is None
     await asyncio.to_thread(c.clear)
     assert await asyncio.to_thread(c.get, "k") is None
+
+
+def test_failed_write_leaves_no_tmp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(self: pl.DataFrame, file, *args: object, **kwargs: object) -> None:
+        Path(file).write_bytes(b"partial")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pl.DataFrame, "write_parquet", _boom)
+    c = StatcastCache(tmp_path)
+    with pytest.raises(OSError, match="disk full"):
+        c.set("k", pl.DataFrame({"a": [1]}))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_concurrent_writers_of_one_key_do_not_collide(tmp_path: Path) -> None:
+    """Two overlapping statcast() calls can cache the same chunk at once from
+    worker threads. With a shared temp path, one writer's rename could hit a
+    file the other already renamed away, or publish its half-written bytes."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    c = StatcastCache(tmp_path)
+    frames = [pl.DataFrame({"a": list(range(i, i + 5_000))}) for i in range(16)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda df: c.set("k", df), frames))
+
+    got = c.get("k")
+    assert got is not None
+    assert any(got.equals(df) for df in frames)  # one whole frame, never a mix
+    assert [p.name for p in tmp_path.iterdir()] == ["k.parquet"]  # no stray temps
+
+
+def test_tmp_files_are_invisible_to_size_and_clear(tmp_path: Path) -> None:
+    """In-flight temp files must not count as cache entries."""
+    c = StatcastCache(tmp_path)
+    c.set("k", pl.DataFrame({"a": [1]}))
+    stray = tmp_path / ".k.parquet.abc123.tmp"
+    stray.write_bytes(b"in flight")
+    assert c.size() == (tmp_path / "k.parquet").stat().st_size
+    c.clear()
+    assert stray.exists()
