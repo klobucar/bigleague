@@ -84,6 +84,7 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 filterwarnings = [
     "ignore::DeprecationWarning:vcr",
@@ -124,6 +125,7 @@ select = [
     "PERF",  # perflint
     "FA",    # flake8-future-annotations
     "G",     # flake8-logging-format
+    "S",     # flake8-bandit (security)
 ]
 ignore = [
     "E501",    # line length — handled by formatter
@@ -135,7 +137,13 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]   # allow assert in tests
+# Tests assert, seed `random` for synthetic data (S311 is about crypto), and
+# spawn `sys.executable` with fixed args (S603 can't tell that from
+# attacker-controlled input).
+"tests/*" = ["S101", "S311", "S603"]
+# Dev-only benchmark harness: same subprocess pattern, plus `ps` for RSS
+# sampling and a sanity assert. Never shipped (see [tool.setuptools]).
+"bench/*" = ["S101", "S603", "S607"]
 
 [tool.ruff.format]
 quote-style = "double"
